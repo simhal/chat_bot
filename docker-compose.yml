@@ -1,0 +1,44 @@
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatbot-backend
+    ports:
+      - "8000:8000"
+    # environment:
+    #   - LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
+    #   - OPENAI_API_KEY=${OPENAI_API_KEY}
+    #   - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+    #   - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chatbot-frontend
+    ports:
+      - "3000:3000"
+    # environment:
+    #   - PUBLIC_LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
+    #   - PUBLIC_LINKEDIN_REDIRECT_URI=${LINKEDIN_REDIRECT_URI:-http://localhost:3000/auth/callback}
+    #   - PUBLIC_API_URL=http://localhost:8000
+    env_file:
+      - ./frontend/.env
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  default:
+    name: chatbot-network
