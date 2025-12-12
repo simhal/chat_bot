@@ -1,5 +1,39 @@
 
 services:
+  # PostgreSQL database - start separately with: docker-compose up -d postgres
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatbot-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: chatbot
+      POSTGRES_USER: chatbot_user
+      POSTGRES_PASSWORD: chatbot_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbot_user -d chatbot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis cache - start separately with: docker-compose up -d redis
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -14,6 +48,11 @@ services:
     #   - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
     env_file:
       - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -38,6 +77,10 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
 
 networks:
   default:

@@ -63,6 +63,9 @@
         <h1>AI Chatbot</h1>
         {#if $auth.isAuthenticated}
             <div class="user-info">
+                {#if $auth.user?.scopes?.includes('admin')}
+                    <a href="/admin" class="admin-link">Admin</a>
+                {/if}
                 {#if $auth.user?.picture}
                     <img src={$auth.user.picture} alt="Profile" class="avatar" />
                 {/if}
@@ -170,6 +173,21 @@
         display: flex;
         align-items: center;
         gap: 0.75rem;
+    }
+
+    .admin-link {
+        padding: 0.5rem 1rem;
+        background: #673ab7;
+        color: white;
+        text-decoration: none;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: background 0.2s;
+    }
+
+    .admin-link:hover {
+        background: #5e35b1;
     }
 
     .avatar {

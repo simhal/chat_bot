@@ -1,0 +1,36 @@
+# Copy this file to terraform.tfvars and fill in your values
+
+# AWS Configuration
+aws_region  = "us-east-1"
+environment = "production"
+
+# Domain Configuration
+domain_name    = "example.com"  # Your domain in Route53
+app_subdomain  = "app"          # Will create app.example.com
+
+# Application Secrets
+linkedin_client_id     = "your-linkedin-client-id"
+linkedin_client_secret = "your-linkedin-client-secret"
+openai_api_key         = "your-openai-api-key"
+jwt_secret_key         = "your-random-64-char-string"
+
+# Database Configuration
+db_name     = "chatbot"
+db_username = "chatbot_admin"
+
+# ECS Configuration (defaults are cost-optimized)
+backend_cpu            = 512   # 0.5 vCPU
+backend_memory         = 1024  # 1 GB
+frontend_cpu           = 256   # 0.25 vCPU
+frontend_memory        = 512   # 0.5 GB
+backend_desired_count  = 1
+frontend_desired_count = 1
+
+# RDS Configuration (cheapest options)
+db_instance_class           = "db.t4g.micro"  # 2 vCPUs, 1GB RAM
+db_allocated_storage        = 20              # Minimum for gp3
+db_backup_retention_period  = 7
+
+# ElastiCache Configuration (cheapest option)
+redis_node_type      = "cache.t4g.micro"  # 0.5GB RAM
+redis_num_cache_nodes = 1

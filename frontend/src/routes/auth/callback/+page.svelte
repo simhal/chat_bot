@@ -3,7 +3,7 @@
     import { goto } from '$app/navigation';
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI } from '$env/static/public';
+    import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI, PUBLIC_API_URL } from '$env/static/public';
 
     let error = '';
     let loading = true;
@@ -45,7 +45,7 @@
             }
 
             // Exchange code for tokens via our backend (keeps client_secret secure)
-            const tokenResponse = await fetch('http://localhost:8000/api/auth/token', {
+            const tokenResponse = await fetch(`${PUBLIC_API_URL}/api/auth/token`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -64,22 +64,26 @@
             }
 
             const tokens = await tokenResponse.json();
-            const idToken = tokens.id_token;
+            const accessToken = tokens.access_token;
+            const refreshToken = tokens.refresh_token;
 
-            if (!idToken) {
-                error = 'No ID token received from LinkedIn';
+            if (!accessToken || !refreshToken) {
+                error = 'No tokens received from server';
                 loading = false;
                 return;
             }
 
-            // Decode the ID token to get user info (base64url decode, no verification needed here)
-            const payload = JSON.parse(base64urlDecode(idToken.split('.')[1]));
+            // Decode the access token to get user info
+            const payload = JSON.parse(base64urlDecode(accessToken.split('.')[1]));
 
             // Store authentication state
-            auth.login(idToken, {
+            auth.login(accessToken, refreshToken, {
+                id: payload.sub,
                 name: payload.name,
+                surname: payload.surname,
                 email: payload.email,
-                picture: payload.picture1
+                picture: payload.picture,
+                scopes: payload.scopes || []
             });
 
             // Redirect to home page
