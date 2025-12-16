@@ -168,12 +168,9 @@
             <h1>{topicLabels[currentTopic] || 'Content Management'}</h1>
             <p class="subtitle">Manage and generate research articles</p>
         </div>
-        <div class="header-actions">
-            <button class="generate-btn" on:click={() => showGenerateModal = true}>
-                Generate New Article
-            </button>
-            <a href="/analyst" class="back-link">Back to Dashboard</a>
-        </div>
+        <button class="generate-btn" on:click={() => showGenerateModal = true}>
+            Generate New Article
+        </button>
     </header>
 
     {#if error}

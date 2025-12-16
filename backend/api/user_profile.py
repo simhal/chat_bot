@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 from database import get_db
 from models import User
+from dependencies import get_current_user
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -21,21 +22,52 @@ class CustomPromptResponse(BaseModel):
     custom_prompt: Optional[str]
 
 
-# Helper function to get current user
-def get_current_user_func(user: dict = Depends(lambda: {})) -> dict:
-    """
-    Get current authenticated user.
-    Note: This should be connected to the actual auth system in main.py
-    """
-    # TODO: Replace with actual get_current_user from main.py
-    # For now, this is a placeholder
-    # In production, import and use the actual get_current_user from main.py
-    return user
+class UserProfileResponse(BaseModel):
+    """Response model for user profile."""
+    id: int
+    email: str
+    name: Optional[str]
+    surname: Optional[str]
+    picture: Optional[str]
+    created_at: str
+    custom_prompt: Optional[str]
+    groups: list[str]
+
+
+@router.get("/me", response_model=UserProfileResponse)
+async def get_user_profile(
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get current user's profile information."""
+    user_id = int(user.get("sub"))
+
+    user_obj = db.query(User).filter(User.id == user_id).first()
+
+    if not user_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Get user's groups
+    groups = [group.name for group in user_obj.groups]
+
+    return UserProfileResponse(
+        id=user_obj.id,
+        email=user_obj.email,
+        name=user_obj.name,
+        surname=user_obj.surname,
+        picture=user_obj.picture,
+        created_at=user_obj.created_at.isoformat(),
+        custom_prompt=user_obj.custom_prompt,
+        groups=groups
+    )
 
 
 @router.get("/custom-prompt", response_model=CustomPromptResponse)
 async def get_custom_prompt(
-    user: dict = Depends(get_current_user_func),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -63,7 +95,7 @@ async def get_custom_prompt(
 @router.put("/custom-prompt", response_model=CustomPromptResponse)
 async def update_custom_prompt(
     request: CustomPromptRequest,
-    user: dict = Depends(get_current_user_func),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -101,7 +133,7 @@ async def update_custom_prompt(
 
 @router.delete("/custom-prompt")
 async def delete_custom_prompt(
-    user: dict = Depends(get_current_user_func),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Clear user's custom prompt."""
@@ -124,3 +156,39 @@ async def delete_custom_prompt(
     db.commit()
 
     return {"message": "Custom prompt cleared successfully"}
+
+
+@router.delete("/me")
+async def delete_user_account(
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete current user's account.
+    This will permanently delete the user and all associated data including:
+    - User profile
+    - Group memberships
+    - Custom prompts
+    - Agent interactions
+    - Content ratings
+
+    This action cannot be undone.
+    """
+    user_id = int(user.get("sub"))
+
+    user_obj = db.query(User).filter(User.id == user_id).first()
+
+    if not user_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Delete the user (cascade will handle related data like group memberships, ratings, etc.)
+    db.delete(user_obj)
+    db.commit()
+
+    return {
+        "message": "Account deleted successfully",
+        "email": user_obj.email
+    }

@@ -84,10 +84,6 @@
 <div class="admin-container">
     <header>
         <h1>Admin Panel</h1>
-        <div class="header-actions">
-            <a href="/admin/content" class="content-link">Content Management</a>
-            <a href="/" class="back-link">Back to Chat</a>
-        </div>
     </header>
 
     {#if error}

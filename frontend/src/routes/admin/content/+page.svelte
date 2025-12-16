@@ -163,14 +163,11 @@
             <h1>Content Management</h1>
             <p class="subtitle">Inspect, rate, edit, and generate research articles</p>
         </div>
-        <div class="header-actions">
-            {#if canEditTopic(currentTopic)}
-                <button class="generate-btn" on:click={() => showGenerateModal = true}>
-                    + Generate Content
-                </button>
-            {/if}
-            <a href="/admin" class="back-link">Back to Admin</a>
-        </div>
+        {#if canEditTopic(currentTopic)}
+            <button class="generate-btn" on:click={() => showGenerateModal = true}>
+                + Generate Content
+            </button>
+        {/if}
     </header>
 
     {#if error}

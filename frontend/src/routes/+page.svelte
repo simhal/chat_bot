@@ -54,11 +54,6 @@
         window.location.href = authUrl.toString();
     }
 
-    function handleLogout() {
-        auth.logout();
-        messages = [];
-    }
-
     async function sendMessage() {
         if (!inputMessage.trim() || loading) return;
 
@@ -184,25 +179,6 @@
 </script>
 
 <div class="app">
-    <header>
-        <h1>Research Platform</h1>
-        {#if $auth.isAuthenticated}
-            <div class="user-info">
-                {#if $auth.user?.scopes?.includes('admin')}
-                    <a href="/admin" class="admin-link">Admin</a>
-                {/if}
-                {#if $auth.user?.scopes?.some(scope => ['macro_analyst', 'equity_analyst', 'fi_analyst', 'esg_analyst'].includes(scope))}
-                    <a href="/analyst" class="analyst-link">Analyst</a>
-                {/if}
-                {#if $auth.user?.picture}
-                    <img src={$auth.user.picture} alt="Profile" class="avatar" />
-                {/if}
-                <span>{$auth.user?.name || 'User'}</span>
-                <button on:click={handleLogout} class="logout-btn">Logout</button>
-            </div>
-        {/if}
-    </header>
-
     <main>
         {#if !$auth.isAuthenticated}
             <div class="login-container">
@@ -370,80 +346,6 @@
         flex-direction: column;
         height: 100vh;
         background: #fafafa;
-    }
-
-    header {
-        background: white;
-        padding: 1rem 2rem;
-        border-bottom: 1px solid #e5e7eb;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    header h1 {
-        margin: 0;
-        font-size: 1.5rem;
-        color: #1a1a1a;
-        font-weight: 600;
-    }
-
-    .user-info {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-    }
-
-    .admin-link {
-        padding: 0.5rem 1rem;
-        background: #6b7280;
-        color: white;
-        text-decoration: none;
-        border-radius: 4px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        transition: background 0.2s;
-    }
-
-    .admin-link:hover {
-        background: #4b5563;
-    }
-
-    .analyst-link {
-        padding: 0.5rem 1rem;
-        background: #3b82f6;
-        color: white;
-        text-decoration: none;
-        border-radius: 4px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        transition: background 0.2s;
-    }
-
-    .analyst-link:hover {
-        background: #2563eb;
-    }
-
-    .avatar {
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-    }
-
-    .logout-btn {
-        padding: 0.5rem 1rem;
-        background: #ef4444;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 0.875rem;
-        font-weight: 500;
-        transition: background 0.2s;
-    }
-
-    .logout-btn:hover {
-        background: #dc2626;
     }
 
     main {
