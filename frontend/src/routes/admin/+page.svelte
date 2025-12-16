@@ -84,7 +84,10 @@
 <div class="admin-container">
     <header>
         <h1>Admin Panel</h1>
-        <a href="/" class="back-link">Back to Chat</a>
+        <div class="header-actions">
+            <a href="/admin/content" class="content-link">Content Management</a>
+            <a href="/" class="back-link">Back to Chat</a>
+        </div>
     </header>
 
     {#if error}
@@ -222,6 +225,26 @@
     header h1 {
         margin: 0;
         color: #333;
+    }
+
+    .header-actions {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+    }
+
+    .content-link {
+        padding: 0.5rem 1rem;
+        background: #2196f3;
+        color: white;
+        text-decoration: none;
+        border-radius: 4px;
+        font-weight: 500;
+        transition: background 0.2s;
+    }
+
+    .content-link:hover {
+        background: #1976d2;
     }
 
     .back-link {

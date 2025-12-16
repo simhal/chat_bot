@@ -14,13 +14,20 @@ from database import get_db
 from models import User, Group
 from auth import create_access_token, create_refresh_token, verify_access_token, verify_refresh_token, revoke_access_token, revoke_refresh_token
 
+# Import API routers (will be included after app initialization)
+# from api.admin_prompts import router as admin_prompts_router
+# from api.user_profile import router as user_profile_router
+
 
 class Settings(BaseSettings):
     linkedin_client_id: str = ""
     linkedin_client_secret: str = ""
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"  # Can be: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo
+    google_api_key: str = ""  # For Google Custom Search API
+    google_search_engine_id: str = ""  # Custom Search Engine ID
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    multi_agent_enabled: bool = True  # Enable/disable multi-agent system
 
     class Config:
         env_file = ".env"
@@ -31,6 +38,21 @@ class Settings(BaseSettings):
 settings = Settings()
 
 app = FastAPI(title="Chatbot API")
+
+# Log configuration on startup
+import logging
+logger = logging.getLogger("uvicorn")
+
+@app.on_event("startup")
+async def startup_event():
+    """Log important configuration on startup."""
+    logger.info("=" * 60)
+    logger.info("Chatbot API Starting Up")
+    logger.info("=" * 60)
+    logger.info(f"OpenAI Model: {settings.openai_model}")
+    logger.info(f"Multi-Agent System: {'ENABLED' if settings.multi_agent_enabled else 'DISABLED'}")
+    logger.info(f"Google Search Available: {bool(settings.google_api_key and settings.google_search_engine_id)}")
+    logger.info("=" * 60)
 
 # CORS middleware
 app.add_middleware(
@@ -48,8 +70,17 @@ class ChatMessage(BaseModel):
     message: str
 
 
+class ArticleReference(BaseModel):
+    id: int
+    topic: str
+    headline: str
+
+
 class ChatResponse(BaseModel):
     response: str
+    agent_type: Optional[str] = None  # Which specialist handled the query
+    routing_reason: Optional[str] = None  # Why this specialist was selected
+    articles: Optional[List[ArticleReference]] = None  # Referenced articles
 
 
 class TokenExchangeRequest(BaseModel):
@@ -72,35 +103,22 @@ class LogoutRequest(BaseModel):
     refresh_token: Optional[str] = None
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """
-    Verify custom JWT access token and return user payload.
-    Uses Redis cache for fast validation.
-    """
-    token = credentials.credentials
-
-    payload = verify_access_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return payload
+# Import shared dependencies from dependencies module
+from dependencies import get_current_user, require_admin
 
 
-async def require_admin(user: dict = Depends(get_current_user)) -> dict:
-    """
-    Dependency to require admin scope.
-    """
-    scopes = user.get("scopes", [])
-    if "admin" not in scopes:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    return user
+# Include API routers for multi-agent system
+# All routers now use shared dependencies from dependencies.py - no monkey-patching needed!
+try:
+    from api.admin_prompts import router as admin_prompts_router
+    from api.user_profile import router as user_profile_router
+    from api.content import router as content_router
+
+    app.include_router(admin_prompts_router)
+    app.include_router(user_profile_router)
+    app.include_router(content_router)
+except ImportError as e:
+    print(f"Warning: Multi-agent API routers not available: {e}")
 
 
 @app.get("/")
@@ -231,9 +249,21 @@ async def exchange_token(request: TokenExchangeRequest, db: Session = Depends(ge
                 # If not found by linkedin_sub, check by email (for existing users from seed or other sources)
                 user = db.query(User).filter(User.email == email).first()
 
+                if user and user.linkedin_sub and user.linkedin_sub != linkedin_sub:
+                    # User exists with same email but different linkedin_sub
+                    # This is a conflict - email must be unique
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Email {email} is already registered with a different LinkedIn account"
+                    )
+
             if user:
                 # Update existing user
-                user.linkedin_sub = linkedin_sub  # Update linkedin_sub in case it was a dummy value
+                # Only update linkedin_sub if it's empty or a placeholder (allows seed users to be claimed)
+                if not user.linkedin_sub or user.linkedin_sub.startswith("admin_") or user.linkedin_sub.startswith("seed_"):
+                    user.linkedin_sub = linkedin_sub
+                    logger.info(f"Updated linkedin_sub for user: {email}")
+
                 user.email = email
                 user.name = name
                 user.surname = surname
@@ -373,25 +403,64 @@ async def logout(
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     chat_message: ChatMessage,
-    user: dict = Depends(get_current_user)
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
-    Chat endpoint with LangChain agent and Redis-backed conversation memory.
-    Each user has isolated conversation context stored in Redis.
+    Chat endpoint with multi-agent financial analyst system.
+    Routes to specialized agents based on query content.
+    Falls back to legacy single-agent system if multi-agent is disabled.
     """
     try:
-        from chatbot_agent import ChatbotAgent
-
         # Get user ID from JWT token
-        user_id = user.get("sub")
+        user_id = int(user.get("sub"))
 
-        # Create agent for this user (with Redis-backed memory)
-        agent = ChatbotAgent(user_id)
+        if settings.multi_agent_enabled:
+            # Multi-agent content system
+            from services.agent_service import AgentService
+            agent_service = AgentService(user_id, db)
 
-        # Process message with conversation context
-        response_text = agent.chat(chat_message.message)
+            # Process message with routing to content agents
+            result = agent_service.chat(chat_message.message)
 
-        return ChatResponse(response=response_text)
+            # Format response with article references
+            response_text = result["response"]
+            articles = result.get("articles", [])
+            article_references = []
+
+            # Add article references at the end if available
+            if articles:
+                response_text += "\n\n---\n**References:**\n"
+                for article in articles:
+                    topic = article['topic']
+                    article_id = article['id']
+                    headline = article['headline']
+                    response_text += f"\n- [{headline}](/?tab={topic}#article-{article_id})"
+
+                    # Build article reference list
+                    article_references.append(ArticleReference(
+                        id=article_id,
+                        topic=topic,
+                        headline=headline
+                    ))
+
+            return ChatResponse(
+                response=response_text,
+                agent_type=result.get("agent_type"),
+                routing_reason=result.get("routing_reason"),
+                articles=article_references if article_references else None
+            )
+        else:
+            # Legacy single-agent system
+            from chatbot_agent import ChatbotAgent
+
+            # Create agent for this user (with Redis-backed memory)
+            agent = ChatbotAgent(user_id)
+
+            # Process message with conversation context
+            response_text = agent.chat(chat_message.message)
+
+            return ChatResponse(response=response_text)
 
     except Exception as e:
         raise HTTPException(

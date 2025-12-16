@@ -13,8 +13,13 @@ RUN uv sync --frozen --no-cache
 
 # Copy application code
 COPY main.py database.py models.py auth.py redis_client.py ./
-COPY conversation_memory.py chatbot_agent.py seed_db.py ./
+COPY conversation_memory.py chatbot_agent.py seed_db.py dependencies.py ./
 COPY .env ./
+
+# Copy multi-agent system directories
+COPY services ./services
+COPY api ./api
+COPY agents ./agents
 
 # Copy Alembic files for database migrations
 COPY alembic.ini ./

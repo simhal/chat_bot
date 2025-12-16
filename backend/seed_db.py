@@ -27,6 +27,23 @@ def seed_database():
         else:
             print("→ 'admin' group already exists")
 
+        # Create analyst groups for content management
+        analyst_groups = [
+            ("equity_analyst", "Equity analysts - can edit equity research content"),
+            ("fi_analyst", "Fixed Income analysts - can edit fixed income research content"),
+            ("macro_analyst", "Macro analysts - can edit macroeconomic research content"),
+            ("esg_analyst", "ESG analysts - can edit ESG research content"),
+        ]
+
+        for group_name, description in analyst_groups:
+            group = db.query(Group).filter(Group.name == group_name).first()
+            if not group:
+                group = Group(name=group_name, description=description)
+                db.add(group)
+                print(f"✓ Created '{group_name}' group")
+            else:
+                print(f"→ '{group_name}' group already exists")
+
         # Create default admin user if it doesn't exist
         admin_email = "simon.haller@gmx.net"
         admin_user = db.query(User).filter(User.email == admin_email).first()

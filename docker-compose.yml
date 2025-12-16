@@ -65,13 +65,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - PUBLIC_LINKEDIN_CLIENT_ID=${PUBLIC_LINKEDIN_CLIENT_ID}
+        - PUBLIC_LINKEDIN_REDIRECT_URI=${PUBLIC_LINKEDIN_REDIRECT_URI:-http://localhost:3000/auth/callback}
+        - PUBLIC_API_URL=${PUBLIC_API_URL:-http://localhost:8000}
     container_name: chatbot-frontend
     ports:
       - "3000:3000"
-    # environment:
-    #   - PUBLIC_LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
-    #   - PUBLIC_LINKEDIN_REDIRECT_URI=${LINKEDIN_REDIRECT_URI:-http://localhost:3000/auth/callback}
-    #   - PUBLIC_API_URL=http://localhost:8000
     env_file:
       - ./frontend/.env
     depends_on:
