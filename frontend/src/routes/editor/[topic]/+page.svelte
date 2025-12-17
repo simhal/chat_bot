@@ -1,7 +1,7 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, generateContent, downloadArticlePDF, approveArticle } from '$lib/api';
+    import { getEditorArticles, rejectArticle, publishArticle, downloadArticlePDF } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
@@ -29,10 +29,6 @@
     let loading = true;
     let error = '';
     let selectedArticle: Article | null = null;
-    let showGenerateModal = false;
-    let generateQuery = '';
-    let isGenerating = false;
-
     const topics = [
         { id: 'macro' as Topic, label: 'Macroeconomic' },
         { id: 'equity' as Topic, label: 'Equity' },
@@ -51,21 +47,25 @@
     $: currentTopic = $page.params.topic as Topic;
 
     function switchTopic(topic: Topic) {
-        goto(`/analyst/${topic}`);
+        goto(`/editor/${topic}`);
     }
 
-    // Check if user can access this topic - only analyst role grants access
+    // Check if user can access this topic
     function canAccessTopic(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
-        return $auth.user.scopes.includes(`${topic}:analyst`);
-    }
 
-    // Filter topics to only show those the user has analyst access to
-    $: accessibleTopics = topics.filter(topic => canAccessTopic(topic.id));
+        // Global admin can access all topics
+        if ($auth.user.scopes.includes('global:admin')) return true;
+
+        // Check for admin, analyst, or editor role for the topic
+        return $auth.user.scopes.includes(`${topic}:admin`) ||
+               $auth.user.scopes.includes(`${topic}:editor`) ||
+               $auth.user.scopes.includes(`${topic}:editor`);
+    }
 
     // Redirect if user doesn't have permission
     $: if ($auth.isAuthenticated && currentTopic && !canAccessTopic(currentTopic)) {
-        goto('/analyst');
+        goto('/editor');
     }
 
     async function loadArticles() {
@@ -74,7 +74,7 @@
         try {
             loading = true;
             error = '';
-            articles = await getAnalystDraftArticles(currentTopic);
+            articles = await getEditorArticles(currentTopic);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to load articles';
             console.error('Error loading articles:', e);
@@ -83,56 +83,23 @@
         }
     }
 
-    async function handleDeleteArticle(articleId: number) {
-        if (!confirm('Are you sure you want to delete this article?')) return;
-
+    async function handleRejectArticle(articleId: number) {
         try {
             error = '';
-            await deleteArticle(articleId);
+            await rejectArticle(articleId);
             await loadArticles();
         } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to delete article';
+            error = e instanceof Error ? e.message : 'Failed to reject article';
         }
     }
 
-    async function handleSubmitArticle(articleId: number) {
+    async function handlePublishArticle(articleId: number) {
         try {
             error = '';
-            await approveArticle(articleId);
+            await publishArticle(articleId);
             await loadArticles();
         } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to approve article';
-        }
-    }
-
-    async function handleReactivateArticle(articleId: number) {
-        try {
-            error = '';
-            await reactivateArticle(articleId);
-            await loadArticles();
-        } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to reactivate article';
-        }
-    }
-
-    function navigateToEditor(articleId: number) {
-        goto(`/analyst/edit/${articleId}`);
-    }
-
-    async function handleGenerateContent() {
-        if (!generateQuery.trim()) return;
-
-        try {
-            isGenerating = true;
-            error = '';
-            await generateContent(currentTopic, generateQuery);
-            await loadArticles();
-            showGenerateModal = false;
-            generateQuery = '';
-        } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to generate content';
-        } finally {
-            isGenerating = false;
+            error = e instanceof Error ? e.message : 'Failed to publish article';
         }
     }
 
@@ -169,7 +136,7 @@
     <!-- Topic Tabs with Generate Button -->
     <div class="tabs-container">
         <nav class="topic-tabs">
-            {#each accessibleTopics as topic}
+            {#each topics as topic}
                 <button
                     class="tab"
                     class:active={currentTopic === topic.id}
@@ -179,9 +146,7 @@
                 </button>
             {/each}
         </nav>
-        <button class="generate-btn" on:click={() => showGenerateModal = true}>
-            + Generate Content
-        </button>
+        <span class="page-title">Editor Review</span>
     </div>
 
     {#if error}
@@ -193,7 +158,7 @@
     {:else if articles.length === 0}
         <div class="empty-state">
             <h2>No Articles Yet</h2>
-            <p>Create your first {topicLabels[currentTopic]} article using the "Generate Content" button above.</p>
+            <p>There are no {topicLabels[currentTopic]} articles waiting for editor review.</p>
         </div>
     {:else}
         <div class="articles-grid">
@@ -255,34 +220,17 @@
                             View
                         </button>
                         <button
-                            class="edit-btn"
-                            on:click={() => navigateToEditor(article.id)}
-                            disabled={!article.is_active}
+                            class="reject-btn"
+                            on:click={() => handleRejectArticle(article.id)}
                         >
-                            Edit
+                            Reject
                         </button>
                         <button
-                            class="submit-btn"
-                            on:click={() => handleSubmitArticle(article.id)}
-                            disabled={!article.is_active}
-                        >Submit</button>
-                        {#if $auth.user?.scopes?.includes('global:admin')}
-                            {#if article.is_active}
-                                <button
-                                    class="delete-btn"
-                                    on:click={() => handleDeleteArticle(article.id)}
-                                >
-                                    Delete
-                                </button>
-                            {:else}
-                                <button
-                                    class="reactivate-btn"
-                                    on:click={() => handleReactivateArticle(article.id)}
-                                >
-                                    Reactivate
-                                </button>
-                            {/if}
-                        {/if}
+                            class="publish-btn"
+                            on:click={() => handlePublishArticle(article.id)}
+                        >
+                            Publish
+                        </button>
                     </div>
                 </div>
             {/each}
@@ -327,10 +275,12 @@
                 <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
                     Download PDF
                 </button>
-                <button class="edit-modal-btn" on:click={() => navigateToEditor(selectedArticle.id)}>
-                    Edit
+                <button class="reject-btn" on:click={() => { handleRejectArticle(selectedArticle.id); selectedArticle = null; }}>
+                    Reject
                 </button>
-                <button class="submit-btn" on:click={() => { handleSubmitArticle(selectedArticle.id); selectedArticle = null; }}>Submit</button>
+                <button class="publish-btn" on:click={() => { handlePublishArticle(selectedArticle.id); selectedArticle = null; }}>
+                    Publish
+                </button>
                 <button on:click={() => selectedArticle = null}>Close</button>
             </div>
         </div>
@@ -338,45 +288,6 @@
 {/if}
 
 <!-- Generate Content Modal -->
-{#if showGenerateModal}
-    <div class="modal-overlay" on:click={() => { showGenerateModal = false; generateQuery = ''; }}>
-        <div class="modal" on:click|stopPropagation>
-            <h3>Generate New {topicLabels[currentTopic]} Content</h3>
-            <p class="modal-description">
-                Use the content agent to research and create a new article.
-                Enter a topic or question below.
-            </p>
-
-            <div class="form-group">
-                <label for="generate-query">Topic / Question</label>
-                <textarea
-                    id="generate-query"
-                    bind:value={generateQuery}
-                    placeholder="Example: Impact of rising interest rates on tech stocks"
-                    rows="4"
-                    disabled={isGenerating}
-                ></textarea>
-            </div>
-
-            {#if isGenerating}
-                <div class="generating-indicator">
-                    <div class="spinner"></div>
-                    <p>Researching and generating content... This may take a minute.</p>
-                </div>
-            {/if}
-
-            <div class="modal-actions">
-                <button on:click={handleGenerateContent} disabled={!generateQuery.trim() || isGenerating}>
-                    {isGenerating ? 'Generating...' : 'Generate Article'}
-                </button>
-                <button on:click={() => { showGenerateModal = false; generateQuery = ''; }} disabled={isGenerating}>
-                    Cancel
-                </button>
-            </div>
-        </div>
-    </div>
-{/if}
-
 <style>
     :global(body) {
         background: #fafafa;
@@ -485,6 +396,8 @@
         font-size: 0.875rem;
         transition: all 0.2s;
     }
+
+    .page-title { padding: 0 1.5rem; font-weight: 600; color: #ff9800; font-size: 0.875rem; }
 
     .generate-btn:hover {
         background: #2563eb;
@@ -655,7 +568,7 @@
         margin-bottom: 1rem;
         padding: 0.75rem;
         background: #fafafa;
-        border-left: 3px solid #3b82f6;
+        border-left: 3px solid #ff9800;
         font-size: 0.9rem;
         line-height: 1.6;
         color: #555;
@@ -697,20 +610,13 @@
         background: #2563eb;
     }
 
-    .submit-btn {
-        background: #10b981;
-        color: white;
-    }
+    .reject-btn { background: #ef4444; color: white; }
 
-    .submit-btn:hover:not(:disabled) {
-        background: #059669;
-    }
+    .reject-btn:hover { background: #dc2626; }
 
-    .edit-btn:disabled,
-    .submit-btn:disabled {
-        background: #d1d5db;
-        cursor: not-allowed;
-    }
+    .publish-btn { background: #10b981; color: white; }
+
+    .publish-btn:hover { background: #059669; }
 
     .rate-btn {
         background: #f9fafb;
@@ -735,15 +641,6 @@
     .delete-btn:disabled {
         background: #d1d5db;
         cursor: not-allowed;
-    }
-
-    .reactivate-btn {
-        background: #8b5cf6;
-        color: white;
-    }
-
-    .reactivate-btn:hover {
-        background: #7c3aed;
     }
 
     /* Modal Styles */

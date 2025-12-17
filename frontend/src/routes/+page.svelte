@@ -1,13 +1,13 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { sendChatMessage, getAdminArticles, getArticle, downloadArticlePDF } from '$lib/api';
+    import { sendChatMessage, getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle } from '$lib/api';
     import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI } from '$env/static/public';
     import Markdown from '$lib/components/Markdown.svelte';
     import { onMount, tick } from 'svelte';
     import { browser } from '$app/environment';
     import { page } from '$app/stores';
 
-    type Tab = 'chat' | 'macro' | 'equity' | 'fixed_income' | 'esg';
+    type Tab = 'chat' | 'search' | 'macro' | 'equity' | 'fixed_income' | 'esg';
 
     interface Article {
         id: number;
@@ -19,6 +19,9 @@
         rating_count: number;
         keywords: string | null;
         created_at: string;
+        author?: string;
+        editor?: string;
+        user_rating?: number | null;
     }
 
     let currentTab: Tab = 'chat';
@@ -31,9 +34,26 @@
     let articles: Article[] = [];
     let articlesLoading = false;
     let selectedArticle: Article | null = null;
+    let showRatingModal = false;
+    let userRating = 0;
+
+    // Search state
+    let searchResults: Article[] = [];
+    let searchLoading = false;
+    let searchParams = {
+        topic: 'all' as 'all' | 'macro' | 'equity' | 'fixed_income' | 'esg',
+        q: '',
+        headline: '',
+        keywords: '',
+        author: '',
+        created_after: '',
+        created_before: '',
+        limit: 10
+    };
 
     const tabs = [
         { id: 'chat' as Tab, label: 'Chat' },
+        { id: 'search' as Tab, label: 'Search' },
         { id: 'macro' as Tab, label: 'Macroeconomic' },
         { id: 'equity' as Tab, label: 'Equity' },
         { id: 'fixed_income' as Tab, label: 'Fixed Income' },
@@ -86,7 +106,7 @@
         try {
             articlesLoading = true;
             error = '';
-            articles = await getAdminArticles(topic);
+            articles = await getPublishedArticles(topic);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to load articles';
             console.error('Error loading articles:', e);
@@ -108,9 +128,14 @@
         currentTab = tab;
         selectedArticle = null;
 
-        // Load articles for the selected topic
-        if (tab !== 'chat') {
+        // Load articles for the selected topic (but not for chat or search)
+        if (tab !== 'chat' && tab !== 'search') {
             loadArticles(tab);
+        }
+
+        // Reset search results when switching away from search tab
+        if (tab !== 'search') {
+            searchResults = [];
         }
     }
 
@@ -127,6 +152,73 @@
         }
     }
 
+    function openRatingModal(article: Article) {
+        selectedArticle = article;
+        showRatingModal = true;
+        userRating = article.user_rating || 0;
+    }
+
+    async function handleRateArticle() {
+        if (!selectedArticle || userRating === 0) return;
+
+        try {
+            error = '';
+            await rateArticle(selectedArticle.id, userRating);
+            showRatingModal = false;
+
+            // Reload the article to get updated rating
+            selectedArticle = await getArticle(selectedArticle.id);
+
+            // Also reload the articles list for the current tab
+            if (currentTab !== 'chat' && currentTab !== 'search') {
+                await loadArticles(currentTab);
+            }
+
+            userRating = 0;
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to rate article';
+            console.error('Error rating article:', e);
+        }
+    }
+
+    async function handleSearch() {
+        try {
+            searchLoading = true;
+            error = '';
+
+            // Build search params object without empty values
+            const params: any = { limit: searchParams.limit };
+            if (searchParams.q) params.q = searchParams.q;
+            if (searchParams.headline) params.headline = searchParams.headline;
+            if (searchParams.keywords) params.keywords = searchParams.keywords;
+            if (searchParams.author) params.author = searchParams.author;
+            if (searchParams.created_after) params.created_after = searchParams.created_after;
+            if (searchParams.created_before) params.created_before = searchParams.created_before;
+
+            searchResults = await searchArticles(searchParams.topic, params);
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to search articles';
+            console.error('Error searching articles:', e);
+        } finally {
+            searchLoading = false;
+        }
+    }
+
+    function handleClearSearch() {
+        searchParams = {
+            topic: 'macro',
+            q: '',
+            headline: '',
+            keywords: '',
+            author: '',
+            created_after: '',
+            created_before: '',
+            limit: 10
+        };
+        searchResults = [];
+        error = '';
+    }
+
     async function handleDeepLink() {
         if (!browser) return;
 
@@ -139,8 +231,8 @@
             currentTab = tabParam;
         }
 
-        // Load articles for the current tab
-        if (currentTab !== 'chat') {
+        // Load articles for the current tab (but not for chat or search)
+        if (currentTab !== 'chat' && currentTab !== 'search') {
             await loadArticles(currentTab);
         }
 
@@ -261,14 +353,14 @@
                             </div>
                         </div>
                     </div>
-                {:else}
-                    <div class="articles-container">
+                {:else if currentTab === 'search'}
+                    <div class="search-container">
                         {#if selectedArticle}
                             <!-- Article Detail View -->
                             <div class="article-detail" id="article-{selectedArticle.id}">
                                 <div class="article-actions">
                                     <button class="back-btn" on:click={() => selectedArticle = null}>
-                                        Back to articles
+                                        Back to search results
                                     </button>
                                     <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
                                         Download PDF
@@ -281,6 +373,12 @@
                                         <span>Readership: {selectedArticle.readership_count}</span>
                                         {#if selectedArticle.rating}
                                             <span>Rating: {selectedArticle.rating}/5</span>
+                                        {/if}
+                                        {#if selectedArticle.author}
+                                            <span>Author: {selectedArticle.author}</span>
+                                        {/if}
+                                        {#if selectedArticle.editor}
+                                            <span>Editor: {selectedArticle.editor}</span>
                                         {/if}
                                     </div>
                                     {#if selectedArticle.keywords}
@@ -296,8 +394,155 @@
                                 </article>
                             </div>
                         {:else}
-                            <!-- Articles List -->
-                            {#if articlesLoading}
+                            <!-- Search Form -->
+                            <div class="search-form">
+                            <h2>Advanced Article Search</h2>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="search-topic">Topic</label>
+                                    <select id="search-topic" bind:value={searchParams.topic}>
+                                        <option value="all">All Topics</option>
+                                        <option value="macro">Macroeconomic</option>
+                                        <option value="equity">Equity</option>
+                                        <option value="fixed_income">Fixed Income</option>
+                                        <option value="esg">ESG</option>
+                                    </select>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="search-limit">Results Limit</label>
+                                    <input
+                                        id="search-limit"
+                                        type="number"
+                                        bind:value={searchParams.limit}
+                                        min="1"
+                                        max="50"
+                                        placeholder="10"
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="search-query">General Search (Vector & Keyword)</label>
+                                <input
+                                    id="search-query"
+                                    type="text"
+                                    bind:value={searchParams.q}
+                                    placeholder="Search across content, headline, and keywords..."
+                                />
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="search-headline">Headline</label>
+                                    <input
+                                        id="search-headline"
+                                        type="text"
+                                        bind:value={searchParams.headline}
+                                        placeholder="Filter by headline..."
+                                    />
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="search-keywords">Keywords</label>
+                                    <input
+                                        id="search-keywords"
+                                        type="text"
+                                        bind:value={searchParams.keywords}
+                                        placeholder="Filter by keywords..."
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="search-author">Author</label>
+                                    <input
+                                        id="search-author"
+                                        type="text"
+                                        bind:value={searchParams.author}
+                                        placeholder="Filter by author..."
+                                    />
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="search-created-after">Created After</label>
+                                    <input
+                                        id="search-created-after"
+                                        type="date"
+                                        bind:value={searchParams.created_after}
+                                    />
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="search-created-before">Created Before</label>
+                                    <input
+                                        id="search-created-before"
+                                        type="date"
+                                        bind:value={searchParams.created_before}
+                                    />
+                                </div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button on:click={handleSearch} disabled={searchLoading}>
+                                    {searchLoading ? 'Searching...' : 'Search'}
+                                </button>
+                                <button class="btn-secondary" on:click={handleClearSearch} disabled={searchLoading}>
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Search Results -->
+                        {#if searchLoading}
+                            <div class="loading-state">Searching articles...</div>
+                        {:else if searchResults.length > 0}
+                            <div class="search-results">
+                                <h3>{searchResults.length} {searchResults.length === 1 ? 'result' : 'results'} found</h3>
+                                <div class="articles-list">
+                                    {#each searchResults as article}
+                                        <div class="article-card" on:click={() => handleArticleClick(article)}>
+                                            <h3>{article.headline}</h3>
+                                            <div class="article-info">
+                                                <span class="topic-badge">{article.topic}</span>
+                                                <span>{formatDate(article.created_at)}</span>
+                                                <span>Readership: {article.readership_count}</span>
+                                                {#if article.rating}
+                                                    <span>Rating: {article.rating}/5</span>
+                                                {/if}
+                                            </div>
+                                            {#if article.author}
+                                                <div class="article-author">
+                                                    <span>Author: {article.author}</span>
+                                                    {#if article.editor}
+                                                        <span>Editor: {article.editor}</span>
+                                                    {/if}
+                                                </div>
+                                            {/if}
+                                            {#if article.keywords}
+                                                <div class="article-keywords">
+                                                    {#each article.keywords.split(',').slice(0, 3) as keyword}
+                                                        <span class="keyword-tag">{keyword.trim()}</span>
+                                                    {/each}
+                                                </div>
+                                            {/if}
+                                        </div>
+                                    {/each}
+                                </div>
+                            </div>
+                        {:else if searchResults.length === 0 && !searchLoading}
+                            <div class="empty-state">
+                                <p>No results found. Try adjusting your search criteria.</p>
+                            </div>
+                        {/if}
+                        {/if}
+                    </div>
+                {:else}
+                    <div class="articles-container">
+                        <!-- Articles List -->
+                        {#if articlesLoading}
                                 <div class="loading-state">Loading articles...</div>
                             {:else if articles.length === 0}
                                 <div class="empty-state">
@@ -326,13 +571,98 @@
                                     {/each}
                                 </div>
                             {/if}
-                        {/if}
                     </div>
                 {/if}
             </div>
         {/if}
     </main>
 </div>
+
+<!-- View Article Modal -->
+{#if selectedArticle && !showRatingModal}
+    <div class="modal-overlay" on:click={() => selectedArticle = null}>
+        <div class="modal large" on:click|stopPropagation>
+            <!-- Fixed Header with Buttons -->
+            <div class="modal-header-fixed">
+                <div class="modal-header">
+                    <h2>{selectedArticle.headline}</h2>
+                    <button class="close-btn" on:click={() => selectedArticle = null}>×</button>
+                </div>
+                <div class="modal-actions-fixed">
+                    <button on:click={() => selectedArticle = null}>← Back to Articles</button>
+                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
+                        Download PDF
+                    </button>
+                    <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
+                        Rate Article
+                    </button>
+                </div>
+            </div>
+
+            <!-- Scrollable Content -->
+            <div class="modal-content-scrollable">
+                <div class="modal-meta">
+                    <span><strong>Published:</strong> {formatDate(selectedArticle.created_at)}</span>
+                    <span><strong>Readership:</strong> {selectedArticle.readership_count}</span>
+                    {#if selectedArticle.rating}
+                        <span><strong>Rating:</strong> {selectedArticle.rating}/5 ({selectedArticle.rating_count} ratings)</span>
+                    {/if}
+                    {#if selectedArticle.author}
+                        <span><strong>Author:</strong> {selectedArticle.author}</span>
+                    {/if}
+                    {#if selectedArticle.editor}
+                        <span><strong>Editor:</strong> {selectedArticle.editor}</span>
+                    {/if}
+                </div>
+                {#if selectedArticle.keywords}
+                    <div class="modal-keywords">
+                        <strong>Keywords:</strong> {selectedArticle.keywords}
+                    </div>
+                {/if}
+                <div class="modal-content">
+                    <Markdown content={selectedArticle.content} />
+                </div>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Rate Article Modal -->
+{#if selectedArticle && showRatingModal}
+    <div class="modal-overlay" on:click={() => { selectedArticle = null; showRatingModal = false; userRating = 0; }}>
+        <div class="modal" on:click|stopPropagation>
+            <h3>Rate Article</h3>
+            <p class="article-title">{selectedArticle.headline}</p>
+
+            <div class="rating-selector">
+                {#each [1, 2, 3, 4, 5] as star}
+                    <button
+                        class="star-btn"
+                        class:selected={star <= userRating}
+                        on:click={() => userRating = star}
+                    >
+                        ⭐
+                    </button>
+                {/each}
+            </div>
+
+            {#if userRating > 0}
+                <p class="rating-text">
+                    You selected: {userRating} star{userRating !== 1 ? 's' : ''}
+                </p>
+            {/if}
+
+            <div class="modal-actions">
+                <button on:click={handleRateArticle} disabled={userRating === 0}>
+                    Submit Rating
+                </button>
+                <button on:click={() => { showRatingModal = false; userRating = 0; }}>
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+{/if}
 
 <style>
     :global(body) {
@@ -707,5 +1037,342 @@
         line-height: 1.8;
         color: #374151;
         font-size: 1rem;
+    }
+
+    /* Search Container */
+    .search-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2rem;
+    }
+
+    .search-form {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        padding: 2rem;
+        margin-bottom: 2rem;
+    }
+
+    .search-form h2 {
+        margin: 0 0 1.5rem 0;
+        color: #1a1a1a;
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+
+    .form-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .form-group label {
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .form-group input,
+    .form-group select {
+        padding: 0.625rem;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        font-family: inherit;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+    }
+
+    .form-actions {
+        display: flex;
+        gap: 0.75rem;
+        margin-top: 1.5rem;
+    }
+
+    .btn-secondary {
+        background: white;
+        color: #6b7280;
+        border: 1px solid #e5e7eb;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+        background: #f9fafb;
+        color: #1a1a1a;
+    }
+
+    .search-results {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
+        padding: 2rem;
+    }
+
+    .search-results h3 {
+        margin: 0 0 1.5rem 0;
+        color: #1a1a1a;
+        font-size: 1.125rem;
+        font-weight: 600;
+    }
+
+    .topic-badge {
+        padding: 0.25rem 0.5rem;
+        background: #f3f4f6;
+        color: #374151;
+        border-radius: 2px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    .article-author {
+        display: flex;
+        gap: 1.5rem;
+        margin-bottom: 0.75rem;
+        font-size: 0.875rem;
+        color: #6b7280;
+        font-style: italic;
+    }
+
+    /* Modal Styles */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+        padding: 2rem;
+    }
+
+    .modal {
+        background: white;
+        padding: 2rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+        min-width: 400px;
+        max-width: 500px;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+
+    .modal.large {
+        min-width: 600px;
+        max-width: 900px;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        overflow: hidden;
+    }
+
+    /* Fixed Header and Actions */
+    .modal-header-fixed {
+        flex-shrink: 0;
+        background: white;
+        border-bottom: 1px solid #e0e0e0;
+    }
+
+    .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 1.5rem 2rem 1rem 2rem;
+        border-bottom: 2px solid #e0e0e0;
+    }
+
+    .modal-header h2 {
+        margin: 0;
+        color: #333;
+        flex: 1;
+    }
+
+    .modal-actions-fixed {
+        display: flex;
+        gap: 1rem;
+        padding: 1rem 2rem;
+        background: #f9fafb;
+        border-bottom: 1px solid #e0e0e0;
+    }
+
+    .modal-actions-fixed button {
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 500;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+    }
+
+    .modal-actions-fixed button:first-child {
+        background: #e5e7eb;
+        color: #374151;
+    }
+
+    .modal-actions-fixed button:first-child:hover {
+        background: #d1d5db;
+    }
+
+    .modal-actions-fixed .download-pdf-btn {
+        background: #3b82f6;
+        color: white;
+    }
+
+    .modal-actions-fixed .download-pdf-btn:hover {
+        background: #2563eb;
+    }
+
+    .modal-actions-fixed .rate-btn {
+        background: #4caf50;
+        color: white;
+    }
+
+    .modal-actions-fixed .rate-btn:hover {
+        background: #45a049;
+    }
+
+    /* Scrollable Content Area */
+    .modal-content-scrollable {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2rem;
+    }
+
+    .close-btn {
+        background: none;
+        border: none;
+        font-size: 2rem;
+        line-height: 1;
+        cursor: pointer;
+        color: #666;
+        padding: 0;
+        width: 32px;
+        height: 32px;
+    }
+
+    .close-btn:hover {
+        color: #333;
+    }
+
+    .modal-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+        padding: 1rem;
+        background: #f9f9f9;
+        border-radius: 4px;
+        font-size: 0.85rem;
+    }
+
+    .modal-keywords {
+        margin-bottom: 1rem;
+        padding: 0.75rem;
+        background: #e3f2fd;
+        border-radius: 4px;
+        font-size: 0.85rem;
+    }
+
+    .modal-content {
+        line-height: 1.8;
+        padding: 1rem;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        background: white;
+    }
+
+    .modal h3 {
+        margin-top: 0;
+        color: #333;
+    }
+
+    .article-title {
+        color: #666;
+        font-style: italic;
+        margin-bottom: 1.5rem;
+    }
+
+    .rating-selector {
+        display: flex;
+        gap: 0.5rem;
+        justify-content: center;
+        margin: 1.5rem 0;
+    }
+
+    .star-btn {
+        background: none;
+        border: none;
+        font-size: 2rem;
+        cursor: pointer;
+        opacity: 0.3;
+        transition: all 0.2s;
+        padding: 0.25rem;
+    }
+
+    .star-btn:hover,
+    .star-btn.selected {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+
+    .rating-text {
+        text-align: center;
+        font-weight: 600;
+        color: #3b82f6;
+        margin-bottom: 1.5rem;
+    }
+
+    .modal-actions {
+        display: flex;
+        gap: 1rem;
+        justify-content: flex-end;
+    }
+
+    .modal-actions button {
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 500;
+    }
+
+    .modal-actions button:first-child {
+        background: #4caf50;
+        color: white;
+    }
+
+    .modal-actions button:first-child:hover:not(:disabled) {
+        background: #45a049;
+    }
+
+    .modal-actions button:first-child:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+    }
+
+    .modal-actions button:last-child {
+        background: #f5f5f5;
+        color: #333;
+    }
+
+    .modal-actions button:last-child:hover {
+        background: #e0e0e0;
     }
 </style>

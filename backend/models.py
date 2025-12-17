@@ -1,11 +1,19 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Table, ForeignKey, UniqueConstraint, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Table, ForeignKey, UniqueConstraint, Text, Enum
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 from datetime import datetime
+import enum
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class ArticleStatus(str, enum.Enum):
+    """Article status enum."""
+    DRAFT = "draft"
+    EDITOR = "editor"
+    PUBLISHED = "published"
 
 
 # Association table for many-to-many relationship between User and Group
@@ -47,9 +55,14 @@ class User(Base):
 
 class Group(Base):
     __tablename__ = 'groups'
+    __table_args__ = (
+        UniqueConstraint('groupname', 'role', name='uq_groups_groupname_role'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), unique=True, index=True, nullable=False)
+    name = Column(String(100), unique=True, index=True, nullable=False)  # Format: "groupname:role"
+    groupname = Column(String(100), index=True, nullable=False)  # macro, equity, fixed_income, esg, global
+    role = Column(String(50), index=True, nullable=False)  # analyst, admin, reader, editor
     description = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -57,7 +70,7 @@ class Group(Base):
     users = relationship('User', secondary=user_groups, back_populates='groups')
 
     def __repr__(self):
-        return f"<Group(id={self.id}, name='{self.name}')>"
+        return f"<Group(id={self.id}, name='{self.name}', groupname='{self.groupname}', role='{self.role}')>"
 
 
 class PromptTemplate(Base):
@@ -137,6 +150,9 @@ class ContentArticle(Base):
     """
     Reusable content articles created by content agents.
     Each article is topic-specific and available to all users.
+
+    NOTE: Article content (1000-2000 words) is stored in ChromaDB vector database.
+    This table only contains metadata for linking with users and tracking stats.
     """
     __tablename__ = 'content_articles'
 
@@ -148,8 +164,21 @@ class ContentArticle(Base):
     # Article headline/title
     headline = Column(String(500), nullable=False, index=True)
 
-    # Article content (max 1000 words as per requirements)
-    content = Column(Text, nullable=False)
+    # Author name
+    author = Column(String(255), nullable=True, index=True)
+
+    # Editor name
+    editor = Column(String(255), nullable=True, index=True)
+
+    # Article status: draft, editor, or published
+    status = Column(
+        Enum(ArticleStatus, values_callable=lambda x: [e.value for e in x], name='article_status', create_type=False),
+        nullable=False,
+        default=ArticleStatus.DRAFT,
+        index=True
+    )
+
+    # Article content is stored in ChromaDB (not in PostgreSQL)
 
     # Readership counter - incremented each time article is accessed
     readership_count = Column(Integer, default=0, nullable=False, index=True)

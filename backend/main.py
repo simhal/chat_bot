@@ -131,6 +131,15 @@ async def health():
     return {"status": "healthy"}
 
 
+@app.get("/api/health/vectordb")
+async def vectordb_health():
+    """Check ChromaDB health and statistics."""
+    from services.vector_service import VectorService
+
+    stats = VectorService.get_collection_stats()
+    return stats
+
+
 @app.get("/debug/settings")
 async def debug_settings():
     """Debug endpoint to check if settings are loaded (without exposing secrets)"""

@@ -5,8 +5,42 @@ This module provides reusable dependencies that can be imported by all API route
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from auth import verify_access_token
+from typing import List
 
 security = HTTPBearer()
+
+
+def has_role(scopes: List[str], groupname: str, role: str) -> bool:
+    """
+    Check if user has a specific role in a group.
+
+    Args:
+        scopes: List of user scopes in format "groupname:role"
+        groupname: Group name (macro, equity, fixed_income, esg, global)
+        role: Role name (admin, analyst, editor, reader)
+
+    Returns:
+        True if user has the role, False otherwise
+    """
+    scope = f"{groupname}:{role}"
+    return scope in scopes
+
+
+def has_any_role_in_group(scopes: List[str], groupname: str, roles: List[str]) -> bool:
+    """
+    Check if user has any of the specified roles in a group.
+    """
+    for role in roles:
+        if has_role(scopes, groupname, role):
+            return True
+    return False
+
+
+def is_global_admin(scopes: List[str]) -> bool:
+    """
+    Check if user has global admin role.
+    """
+    return has_role(scopes, "global", "admin")
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
@@ -37,23 +71,23 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
     """
-    Dependency to require admin scope.
+    Dependency to require global admin role.
 
     Args:
         user: Current authenticated user from get_current_user dependency
 
     Returns:
-        User dict if user has admin scope
+        User dict if user has global:admin scope
 
     Raises:
-        HTTPException: If user does not have admin scope
+        HTTPException: If user does not have global:admin scope
     """
     scopes = user.get("scopes", [])
 
-    if "admin" not in scopes:
+    if not is_global_admin(scopes):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
+            detail="Global admin access required"
         )
 
     return user
@@ -61,55 +95,93 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
 
 def require_analyst(topic: str):
     """
-    Dependency factory to require analyst scope for a specific topic.
+    Dependency factory to require analyst, editor, or admin role for a specific topic.
+    Global admins also have access.
 
     Args:
         topic: Topic name (macro, equity, fixed_income, esg)
 
     Returns:
-        Dependency function that checks for appropriate analyst scope
+        Dependency function that checks for appropriate permissions
     """
-    # Map topics to required analyst groups
-    topic_to_group = {
-        "macro": "macro_analyst",
-        "equity": "equity_analyst",
-        "fixed_income": "fi_analyst",
-        "esg": "esg_analyst"
-    }
+    # Valid topic names
+    valid_topics = ["macro", "equity", "fixed_income", "esg"]
 
     def check_analyst_permission(user: dict = Depends(get_current_user)) -> dict:
         """
-        Check if user has analyst permission for the topic.
+        Check if user has analyst/editor/admin permission for the topic.
 
         Args:
             user: Current authenticated user
 
         Returns:
-            User dict if user has required analyst scope or admin scope
+            User dict if user has required permissions
 
         Raises:
-            HTTPException: If user does not have required analyst scope
+            HTTPException: If user does not have required permissions
         """
         scopes = user.get("scopes", [])
 
-        # Admin can edit all content
-        if "admin" in scopes:
+        # Global admin can access all content
+        if is_global_admin(scopes):
             return user
 
-        # Check for specific analyst group
-        required_group = topic_to_group.get(topic)
-        if not required_group:
+        # Validate topic
+        if topic not in valid_topics:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid topic: {topic}"
             )
 
-        if required_group not in scopes:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Analyst access required. You need '{required_group}' scope to edit {topic} content."
-            )
+        # Check if user has admin, analyst, or editor role for this topic
+        if has_any_role_in_group(scopes, topic, ["admin", "analyst", "editor"]):
+            return user
 
-        return user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied. You need '{topic}:admin', '{topic}:analyst', or '{topic}:editor' role to access {topic} content."
+        )
 
     return check_analyst_permission
+
+
+def require_editor(topic: str):
+    """
+    Dependency factory to require editor or admin role for a specific topic.
+    Global admins also have access.
+
+    Args:
+        topic: Topic name (macro, equity, fixed_income, esg)
+
+    Returns:
+        Dependency function that checks for editor permissions
+    """
+    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+
+    def check_editor_permission(user: dict = Depends(get_current_user)) -> dict:
+        """
+        Check if user has editor/admin permission for the topic.
+        """
+        scopes = user.get("scopes", [])
+
+        # Global admin can access all content
+        if is_global_admin(scopes):
+            return user
+
+        # Validate topic
+        if topic not in valid_topics:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid topic: {topic}"
+            )
+
+        # Check if user has admin or editor role for this topic
+        if has_any_role_in_group(scopes, topic, ["admin", "editor"]):
+            return user
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied. You need '{topic}:admin' or '{topic}:editor' role to edit {topic} content."
+        )
+
+    return check_editor_permission

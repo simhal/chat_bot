@@ -1,9 +1,8 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getAdminArticles, deleteArticle, rateArticle, editArticle, generateContent, downloadArticlePDF } from '$lib/api';
+    import { getAdminArticles, deleteArticle, reactivateArticle, editArticle, generateContent, searchArticles, type SearchParams } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
-    import Markdown from '$lib/components/Markdown.svelte';
 
     type Topic = 'macro' | 'equity' | 'fixed_income' | 'esg';
 
@@ -16,22 +15,35 @@
         rating: number | null;
         rating_count: number;
         keywords: string | null;
+        status: string;  // draft, editor, or published
         created_at: string;
         updated_at: string;
         created_by_agent: string;
         is_active: boolean;
+        author?: string;
+        editor?: string;
+    }
+
+    interface ExtendedSearchParams extends SearchParams {
+        topic?: string;
     }
 
     let currentTopic: Topic = 'macro';
     let articles: Article[] = [];
     let loading = true;
     let error = '';
-    let selectedArticle: Article | null = null;
-    let showRatingModal = false;
-    let userRating: number = 0;
     let showGenerateModal = false;
     let generateQuery = '';
     let isGenerating = false;
+
+    // Search state
+    let showSearchSection = false;
+    let searchParams: ExtendedSearchParams = {
+        topic: 'all',  // Default to 'all' topics
+        limit: 10
+    };
+    let isSearching = false;
+    let searchActive = false;
 
     const topics = [
         { id: 'macro' as Topic, label: 'Macro' },
@@ -49,18 +61,13 @@
     function canEditTopic(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
 
-        // Admin can edit all
-        if ($auth.user.scopes.includes('admin')) return true;
+        // Global admin can edit all
+        if ($auth.user.scopes.includes('global:admin')) return true;
 
-        // Check for specific analyst permission
-        const topicMap: Record<string, string> = {
-            'macro': 'macro_analyst',
-            'equity': 'equity_analyst',
-            'fixed_income': 'fi_analyst',
-            'esg': 'esg_analyst'
-        };
-
-        return $auth.user.scopes.includes(topicMap[topic]);
+        // Check for topic-specific admin, analyst, or editor role
+        return $auth.user.scopes.includes(`${topic}:admin`) ||
+               $auth.user.scopes.includes(`${topic}:analyst`) ||
+               $auth.user.scopes.includes(`${topic}:editor`);
     }
 
     async function loadArticles() {
@@ -88,25 +95,16 @@
         }
     }
 
-    async function handleRateArticle() {
-        if (!selectedArticle || !userRating) return;
+    async function handleReactivateArticle(articleId: number) {
+        if (!confirm('Are you sure you want to reactivate this article?')) return;
 
         try {
             error = '';
-            await rateArticle(selectedArticle.id, userRating);
+            await reactivateArticle(articleId);
             await loadArticles();
-            selectedArticle = null;
-            showRatingModal = false;
-            userRating = 0;
         } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to rate article';
+            error = e instanceof Error ? e.message : 'Failed to reactivate article';
         }
-    }
-
-    function openRatingModal(article: Article) {
-        selectedArticle = article;
-        showRatingModal = true;
-        userRating = 0;
     }
 
     function switchTopic(topic: Topic) {
@@ -135,6 +133,27 @@
         }
     }
 
+    async function handleSearch() {
+        try {
+            isSearching = true;
+            error = '';
+            const searchTopic = searchParams.topic || 'all';
+            articles = await searchArticles(searchTopic, searchParams);
+            searchActive = true;
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Search failed';
+            console.error('Search error:', e);
+        } finally {
+            isSearching = false;
+        }
+    }
+
+    function handleClearSearch() {
+        searchParams = { topic: 'all', limit: 10 };
+        searchActive = false;
+        loadArticles();
+    }
+
     function formatDate(dateString: string) {
         return new Date(dateString).toLocaleString();
     }
@@ -143,48 +162,146 @@
         return content.length > maxLength ? content.substring(0, maxLength) + '...' : content;
     }
 
-    async function handleDownloadPDF(articleId: number) {
-        try {
-            error = '';
-            await downloadArticlePDF(articleId);
-        } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to download PDF';
-        }
-    }
-
     onMount(() => {
         loadArticles();
     });
 </script>
 
 <div class="admin-content-container">
-    <header>
-        <div>
-            <h1>Content Management</h1>
-            <p class="subtitle">Inspect, rate, edit, and generate research articles</p>
-        </div>
+    {#if error}
+        <div class="error-message">{error}</div>
+    {/if}
+
+    <!-- Tabs with Generate Button -->
+    <div class="tabs-container">
+        <nav class="topic-tabs">
+            {#each topics as topic}
+                <button
+                    class="tab"
+                    class:active={currentTopic === topic.id}
+                    on:click={() => switchTopic(topic.id)}
+                >
+                    {topic.label}
+                </button>
+            {/each}
+        </nav>
         {#if canEditTopic(currentTopic)}
             <button class="generate-btn" on:click={() => showGenerateModal = true}>
                 + Generate Content
             </button>
         {/if}
-    </header>
+    </div>
 
-    {#if error}
-        <div class="error-message">{error}</div>
-    {/if}
+    <!-- Search Section -->
+    <div class="search-section">
+        <button class="toggle-search-btn" on:click={() => showSearchSection = !showSearchSection}>
+            {showSearchSection ? '▼' : '▶'} Advanced Search
+        </button>
 
-    <nav class="topic-tabs">
-        {#each topics as topic}
-            <button
-                class="tab"
-                class:active={currentTopic === topic.id}
-                on:click={() => switchTopic(topic.id)}
-            >
-                {topic.label}
-            </button>
-        {/each}
-    </nav>
+        {#if showSearchSection}
+            <div class="search-form">
+                <div class="search-grid">
+                    <div class="search-field">
+                        <label for="search-topic">Topic</label>
+                        <select
+                            id="search-topic"
+                            bind:value={searchParams.topic}
+                        >
+                            <option value="all">All Topics</option>
+                            <option value="macro">Macro</option>
+                            <option value="equity">Equities</option>
+                            <option value="fixed_income">Fixed Income</option>
+                            <option value="esg">ESG</option>
+                        </select>
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-query">General Search (Vector + Keyword)</label>
+                        <input
+                            id="search-query"
+                            type="text"
+                            bind:value={searchParams.q}
+                            placeholder="Search in headline, keywords, and content..."
+                        />
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-headline">Headline</label>
+                        <input
+                            id="search-headline"
+                            type="text"
+                            bind:value={searchParams.headline}
+                            placeholder="Filter by headline..."
+                        />
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-keywords">Keywords</label>
+                        <input
+                            id="search-keywords"
+                            type="text"
+                            bind:value={searchParams.keywords}
+                            placeholder="Filter by keywords..."
+                        />
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-author">Author</label>
+                        <input
+                            id="search-author"
+                            type="text"
+                            bind:value={searchParams.author}
+                            placeholder="Filter by author..."
+                        />
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-created-after">Created After</label>
+                        <input
+                            id="search-created-after"
+                            type="date"
+                            bind:value={searchParams.created_after}
+                        />
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-created-before">Created Before</label>
+                        <input
+                            id="search-created-before"
+                            type="date"
+                            bind:value={searchParams.created_before}
+                        />
+                    </div>
+
+                    <div class="search-field">
+                        <label for="search-limit">Results Limit</label>
+                        <input
+                            id="search-limit"
+                            type="number"
+                            bind:value={searchParams.limit}
+                            min="1"
+                            max="50"
+                        />
+                    </div>
+                </div>
+
+                <div class="search-actions">
+                    <button class="search-btn" on:click={handleSearch} disabled={isSearching}>
+                        {isSearching ? 'Searching...' : 'Search'}
+                    </button>
+                    <button class="clear-btn" on:click={handleClearSearch} disabled={isSearching}>
+                        Clear & Show All
+                    </button>
+                </div>
+
+                {#if searchActive}
+                    <div class="search-status">
+                        Showing search results ({articles.length} found)
+                    </div>
+                {/if}
+            </div>
+        {/if}
+    </div>
 
     {#if loading}
         <div class="loading">Loading articles...</div>
@@ -198,9 +315,14 @@
                 <div class="article-card" class:inactive={!article.is_active}>
                     <div class="article-header">
                         <h3>{article.headline}</h3>
-                        {#if !article.is_active}
-                            <span class="inactive-badge">Inactive</span>
-                        {/if}
+                        <div class="badges">
+                            <span class="status-badge status-{article.status}">
+                                {article.status}
+                            </span>
+                            {#if !article.is_active}
+                                <span class="inactive-badge">Inactive</span>
+                            {/if}
+                        </div>
                     </div>
 
                     <div class="article-meta">
@@ -243,12 +365,6 @@
                     </div>
 
                     <div class="article-actions">
-                        <button
-                            class="view-btn"
-                            on:click={() => { selectedArticle = article; showRatingModal = false; }}
-                        >
-                            View Full
-                        </button>
                         {#if canEditTopic(article.topic)}
                             <button
                                 class="edit-btn"
@@ -257,20 +373,22 @@
                                 Edit
                             </button>
                         {/if}
-                        <button
-                            class="rate-btn"
-                            on:click={() => openRatingModal(article)}
-                        >
-                            Rate
-                        </button>
-                        {#if $auth.user?.scopes?.includes('admin')}
-                            <button
-                                class="delete-btn"
-                                on:click={() => handleDeleteArticle(article.id)}
-                                disabled={!article.is_active}
-                            >
-                                Delete
-                            </button>
+                        {#if $auth.user?.scopes?.includes('global:admin')}
+                            {#if article.is_active}
+                                <button
+                                    class="delete-btn"
+                                    on:click={() => handleDeleteArticle(article.id)}
+                                >
+                                    Delete
+                                </button>
+                            {:else}
+                                <button
+                                    class="reactivate-btn"
+                                    on:click={() => handleReactivateArticle(article.id)}
+                                >
+                                    Reactivate
+                                </button>
+                            {/if}
                         {/if}
                     </div>
                 </div>
@@ -278,85 +396,6 @@
         </div>
     {/if}
 </div>
-
-<!-- View Article Modal -->
-{#if selectedArticle && !showRatingModal}
-    <div class="modal-overlay" on:click={() => selectedArticle = null}>
-        <div class="modal large" on:click|stopPropagation>
-            <div class="modal-header">
-                <h2>{selectedArticle.headline}</h2>
-                <button class="close-btn" on:click={() => selectedArticle = null}>×</button>
-            </div>
-
-            <div class="modal-meta">
-                <span><strong>ID:</strong> {selectedArticle.id}</span>
-                <span><strong>Agent:</strong> {selectedArticle.created_by_agent}</span>
-                <span><strong>Created:</strong> {formatDate(selectedArticle.created_at)}</span>
-                <span><strong>Readership:</strong> {selectedArticle.readership_count}</span>
-                <span>
-                    <strong>Rating:</strong>
-                    {#if selectedArticle.rating !== null}
-                        {'⭐'.repeat(selectedArticle.rating)} ({selectedArticle.rating_count} ratings)
-                    {:else}
-                        No ratings
-                    {/if}
-                </span>
-            </div>
-
-            {#if selectedArticle.keywords}
-                <div class="modal-keywords">
-                    <strong>Keywords:</strong> {selectedArticle.keywords}
-                </div>
-            {/if}
-
-            <div class="modal-content">
-                <Markdown content={selectedArticle.content} />
-            </div>
-
-            <div class="modal-actions">
-                <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
-                    Download PDF
-                </button>
-                <button on:click={() => selectedArticle = null}>Close</button>
-            </div>
-        </div>
-    </div>
-{/if}
-
-<!-- Rate Article Modal -->
-{#if selectedArticle && showRatingModal}
-    <div class="modal-overlay" on:click={() => { selectedArticle = null; showRatingModal = false; userRating = 0; }}>
-        <div class="modal" on:click|stopPropagation>
-            <h3>Rate Article</h3>
-            <p class="article-title">{selectedArticle.headline}</p>
-
-            <div class="rating-selector">
-                {#each [1, 2, 3, 4, 5] as star}
-                    <button
-                        class="star-btn"
-                        class:selected={userRating >= star}
-                        on:click={() => userRating = star}
-                    >
-                        ⭐
-                    </button>
-                {/each}
-            </div>
-
-            {#if userRating > 0}
-                <p class="rating-text">{userRating} star{userRating > 1 ? 's' : ''}</p>
-            {/if}
-
-            <div class="modal-actions">
-                <button on:click={handleRateArticle} disabled={!userRating}>
-                    Submit Rating
-                </button>
-                <button on:click={() => { selectedArticle = null; showRatingModal = false; userRating = 0; }}>
-                    Cancel
-                </button>
-            </div>
-        </div>
-    </div>
-{/if}
 
 <!-- Generate Content Modal -->
 {#if showGenerateModal}
@@ -399,10 +438,15 @@
 {/if}
 
 <style>
+    :global(body) {
+        background: #fafafa;
+    }
+
     .admin-content-container {
-        max-width: 1400px;
+        max-width: 1200px;
         margin: 0 auto;
-        padding: 2rem;
+        background: white;
+        min-height: 100vh;
     }
 
     header {
@@ -431,7 +475,7 @@
     }
 
     .back-link {
-        color: #0077b5;
+        color: #3b82f6;
         text-decoration: none;
         font-weight: 500;
     }
@@ -448,38 +492,174 @@
         margin-bottom: 1rem;
     }
 
+    /* Search Section Styles */
+    .search-section {
+        background: #f5f5f5;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .toggle-search-btn {
+        background: none;
+        border: none;
+        color: #3b82f6;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 0.5rem;
+        width: 100%;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .toggle-search-btn:hover {
+        color: #005a8c;
+    }
+
+    .search-form {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid #ddd;
+    }
+
+    .search-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .search-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .search-field label {
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #333;
+    }
+
+    .search-field input,
+    .search-field select {
+        padding: 0.5rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 0.875rem;
+    }
+
+    .search-field input:focus,
+    .search-field select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(0, 119, 181, 0.1);
+    }
+
+    .search-field select {
+        cursor: pointer;
+        background-color: white;
+    }
+
+    .search-actions {
+        display: flex;
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+
+    .search-btn {
+        background: #3b82f6;
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .search-btn:hover:not(:disabled) {
+        background: #005a8c;
+    }
+
+    .search-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .clear-btn {
+        background: #666;
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .clear-btn:hover:not(:disabled) {
+        background: #444;
+    }
+
+    .clear-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .search-status {
+        margin-top: 1rem;
+        padding: 0.75rem;
+        background: #e3f2fd;
+        border-left: 4px solid #3b82f6;
+        border-radius: 4px;
+        color: #005a8c;
+        font-weight: 500;
+    }
+
     .loading, .empty-state {
         text-align: center;
         padding: 3rem;
         color: #666;
     }
 
+    /* Tabs Container */
+    .tabs-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: white;
+        border-bottom: 1px solid #e5e7eb;
+        margin-bottom: 2rem;
+    }
+
     .topic-tabs {
         display: flex;
-        gap: 0.5rem;
-        margin-bottom: 2rem;
-        border-bottom: 2px solid #e0e0e0;
     }
 
     .tab {
-        padding: 0.75rem 1.5rem;
+        padding: 1rem 1.5rem;
         background: none;
         border: none;
-        border-bottom: 3px solid transparent;
+        border-bottom: 2px solid transparent;
         cursor: pointer;
-        font-size: 1rem;
+        font-size: 0.875rem;
         font-weight: 500;
-        color: #666;
+        color: #6b7280;
         transition: all 0.2s;
     }
 
     .tab:hover {
-        color: #0077b5;
+        color: #1a1a1a;
+        background: #f9fafb;
     }
 
     .tab.active {
-        color: #0077b5;
-        border-bottom-color: #0077b5;
+        color: #3b82f6;
+        border-bottom-color: #3b82f6;
     }
 
     .articles-grid {
@@ -522,9 +702,39 @@
         flex: 1;
     }
 
+    .badges {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .status-badge {
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        white-space: nowrap;
+        text-transform: capitalize;
+    }
+
+    .status-badge.status-draft {
+        background: #9e9e9e;
+        color: white;
+    }
+
+    .status-badge.status-editor {
+        background: #ff9800;
+        color: white;
+    }
+
+    .status-badge.status-published {
+        background: #4caf50;
+        color: white;
+    }
+
     .inactive-badge {
         padding: 0.25rem 0.5rem;
-        background: #ff9800;
+        background: #f44336;
         color: white;
         border-radius: 4px;
         font-size: 0.75rem;
@@ -585,7 +795,7 @@
         margin-bottom: 1rem;
         padding: 0.75rem;
         background: #fafafa;
-        border-left: 3px solid #0077b5;
+        border-left: 3px solid #3b82f6;
         font-size: 0.9rem;
         line-height: 1.6;
         color: #555;
@@ -608,7 +818,7 @@
     }
 
     .view-btn {
-        background: #0077b5;
+        background: #3b82f6;
         color: white;
     }
 
@@ -664,6 +874,15 @@
         cursor: not-allowed;
     }
 
+    .reactivate-btn {
+        background: #4caf50;
+        color: white;
+    }
+
+    .reactivate-btn:hover {
+        background: #45a049;
+    }
+
     .modal-overlay {
         position: fixed;
         top: 0;
@@ -692,6 +911,17 @@
     .modal.large {
         min-width: 600px;
         max-width: 900px;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        overflow: hidden;
+    }
+
+    /* Fixed Header and Actions */
+    .modal-header-fixed {
+        flex-shrink: 0;
+        background: white;
+        border-bottom: 1px solid #e0e0e0;
     }
 
     .modal-header {
@@ -699,9 +929,60 @@
         justify-content: space-between;
         align-items: flex-start;
         gap: 1rem;
-        margin-bottom: 1rem;
-        padding-bottom: 1rem;
+        padding: 1.5rem 2rem 1rem 2rem;
         border-bottom: 2px solid #e0e0e0;
+    }
+
+    .modal-actions-fixed {
+        display: flex;
+        gap: 1rem;
+        padding: 1rem 2rem;
+        background: #f9fafb;
+        border-bottom: 1px solid #e0e0e0;
+    }
+
+    .modal-actions-fixed button {
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 500;
+        font-size: 0.875rem;
+        transition: all 0.2s;
+    }
+
+    .modal-actions-fixed button:first-child {
+        background: #e5e7eb;
+        color: #374151;
+    }
+
+    .modal-actions-fixed button:first-child:hover {
+        background: #d1d5db;
+    }
+
+    .modal-actions-fixed .download-pdf-btn {
+        background: #3b82f6;
+        color: white;
+    }
+
+    .modal-actions-fixed .download-pdf-btn:hover {
+        background: #2563eb;
+    }
+
+    .modal-actions-fixed .rate-btn {
+        background: #4caf50;
+        color: white;
+    }
+
+    .modal-actions-fixed .rate-btn:hover {
+        background: #45a049;
+    }
+
+    /* Scrollable Content Area */
+    .modal-content-scrollable {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2rem;
     }
 
     .modal-header h2 {
@@ -730,7 +1011,7 @@
         display: flex;
         flex-wrap: wrap;
         gap: 1rem;
-        margin-bottom: 1rem;
+        margin-bottom: 1.5rem;
         padding: 1rem;
         background: #f9f9f9;
         border-radius: 4px;
@@ -746,13 +1027,11 @@
     }
 
     .modal-content {
-        margin-bottom: 1.5rem;
         line-height: 1.8;
-        max-height: 50vh;
-        overflow-y: auto;
         padding: 1rem;
         border: 1px solid #e0e0e0;
         border-radius: 4px;
+        background: white;
     }
 
     .modal h3 {
@@ -792,7 +1071,7 @@
     .rating-text {
         text-align: center;
         font-weight: 600;
-        color: #0077b5;
+        color: #3b82f6;
         margin-bottom: 1.5rem;
     }
 
@@ -811,7 +1090,7 @@
     }
 
     .modal-actions button:first-child {
-        background: #0077b5;
+        background: #3b82f6;
         color: white;
     }
 
@@ -884,7 +1163,7 @@
         height: 40px;
         margin: 0 auto 1rem;
         border: 4px solid #f3f3f3;
-        border-top: 4px solid #0077b5;
+        border-top: 4px solid #3b82f6;
         border-radius: 50%;
         animation: spin 1s linear infinite;
     }

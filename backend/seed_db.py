@@ -15,30 +15,54 @@ def seed_database():
     db = SessionLocal()
 
     try:
-        # Create admin group if it doesn't exist
-        admin_group = db.query(Group).filter(Group.name == "admin").first()
+        # Create admin group if it doesn't exist (global:admin in new structure)
+        admin_group = db.query(Group).filter(Group.name == "global:admin").first()
         if not admin_group:
             admin_group = Group(
-                name="admin",
+                name="global:admin",
+                groupname="global",
+                role="admin",
                 description="System administrators with full access"
             )
             db.add(admin_group)
-            print("✓ Created 'admin' group")
+            print("✓ Created 'global:admin' group")
         else:
-            print("→ 'admin' group already exists")
+            print("→ 'global:admin' group already exists")
 
-        # Create analyst groups for content management
-        analyst_groups = [
-            ("equity_analyst", "Equity analysts - can edit equity research content"),
-            ("fi_analyst", "Fixed Income analysts - can edit fixed income research content"),
-            ("macro_analyst", "Macro analysts - can edit macroeconomic research content"),
-            ("esg_analyst", "ESG analysts - can edit ESG research content"),
+        # Create topic groups for content management (new groupname:role format)
+        # Include admin, analyst, editor, reader roles for each topic
+        topic_groups = [
+            # Equity groups
+            ("equity:admin", "equity", "admin", "Admin for Equity content"),
+            ("equity:analyst", "equity", "analyst", "Equity analysts - can edit equity research content"),
+            ("equity:editor", "equity", "editor", "Editor for Equity content"),
+            ("equity:reader", "equity", "reader", "Reader for Equity content"),
+            # Fixed Income groups
+            ("fixed_income:admin", "fixed_income", "admin", "Admin for Fixed Income content"),
+            ("fixed_income:analyst", "fixed_income", "analyst", "Fixed Income analysts - can edit fixed income research content"),
+            ("fixed_income:editor", "fixed_income", "editor", "Editor for Fixed Income content"),
+            ("fixed_income:reader", "fixed_income", "reader", "Reader for Fixed Income content"),
+            # Macro groups
+            ("macro:admin", "macro", "admin", "Admin for Macroeconomic content"),
+            ("macro:analyst", "macro", "analyst", "Macro analysts - can edit macroeconomic research content"),
+            ("macro:editor", "macro", "editor", "Editor for Macroeconomic content"),
+            ("macro:reader", "macro", "reader", "Reader for Macroeconomic content"),
+            # ESG groups
+            ("esg:admin", "esg", "admin", "Admin for ESG content"),
+            ("esg:analyst", "esg", "analyst", "ESG analysts - can edit ESG research content"),
+            ("esg:editor", "esg", "editor", "Editor for ESG content"),
+            ("esg:reader", "esg", "reader", "Reader for ESG content"),
         ]
 
-        for group_name, description in analyst_groups:
+        for group_name, groupname, role, description in topic_groups:
             group = db.query(Group).filter(Group.name == group_name).first()
             if not group:
-                group = Group(name=group_name, description=description)
+                group = Group(
+                    name=group_name,
+                    groupname=groupname,
+                    role=role,
+                    description=description
+                )
                 db.add(group)
                 print(f"✓ Created '{group_name}' group")
             else:

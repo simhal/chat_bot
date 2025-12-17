@@ -179,15 +179,17 @@ Research context from recent news:
 {search_context}
 
 Requirements:
-1. Write a clear, informative article (max 1000 words)
+1. Write a clear, informative article (1000-2000 words)
 2. Include a compelling headline
 3. Use factual information from the research
 4. Cite sources where applicable
 5. Make it reusable for other users interested in this topic
+6. Include author name (use your agent name: {self.topic})
 
 Format your response as:
 HEADLINE: [Your headline]
 KEYWORDS: [comma-separated keywords]
+AUTHOR: [Author name]
 CONTENT:
 [Your article content]
 """)
@@ -210,7 +212,8 @@ CONTENT:
             headline=parsed_article['headline'],
             content=parsed_article['content'],
             keywords=parsed_article['keywords'],
-            agent_name=self.topic
+            agent_name=self.topic,
+            author=parsed_article.get('author')
         )
         db_time = time.time() - db_start
 
@@ -262,12 +265,13 @@ CONTENT:
             response_text: LLM response
 
         Returns:
-            Dict with 'headline', 'keywords', 'content'
+            Dict with 'headline', 'keywords', 'author', 'content'
         """
         lines = response_text.strip().split('\n')
 
         headline = "Untitled Article"
         keywords = ""
+        author = self.topic  # Default to agent name
         content_lines = []
         parsing_content = False
 
@@ -276,6 +280,8 @@ CONTENT:
                 headline = line.replace('HEADLINE:', '').strip()
             elif line.startswith('KEYWORDS:'):
                 keywords = line.replace('KEYWORDS:', '').strip()
+            elif line.startswith('AUTHOR:'):
+                author = line.replace('AUTHOR:', '').strip()
             elif line.startswith('CONTENT:'):
                 parsing_content = True
             elif parsing_content:
@@ -287,14 +293,18 @@ CONTENT:
         if not content:
             content = response_text
 
-        # Truncate content to roughly 1000 words
+        # Enforce 1000-2000 words (changed from max 1000)
         words = content.split()
-        if len(words) > 1000:
-            content = ' '.join(words[:1000]) + "..."
+        if len(words) < 1000:
+            logger.warning(f"Article too short ({len(words)} words), padding not recommended")
+        elif len(words) > 2000:
+            content = ' '.join(words[:2000]) + "..."
+            logger.warning(f"Article truncated from {len(words)} to 2000 words")
 
         return {
             'headline': headline[:500],  # Limit headline length
             'keywords': keywords[:500] if keywords else None,
+            'author': author[:255] if author else None,
             'content': content
         }
 

@@ -3,116 +3,53 @@
     import { goto } from '$app/navigation';
     import { onMount } from 'svelte';
 
-    interface TopicCard {
-        id: string;
-        label: string;
-        description: string;
-        requiredScope: string;
-        icon: string;
-    }
-
-    const allTopics: TopicCard[] = [
-        {
-            id: 'macro',
-            label: 'Macroeconomic Research',
-            description: 'Economic indicators, central bank policy, and global macro trends',
-            requiredScope: 'macro_analyst',
-            icon: 'MACRO'
-        },
-        {
-            id: 'equity',
-            label: 'Equity Research',
-            description: 'Stock markets, company analysis, and equity valuations',
-            requiredScope: 'equity_analyst',
-            icon: 'EQUITY'
-        },
-        {
-            id: 'fixed_income',
-            label: 'Fixed Income Research',
-            description: 'Bonds, yields, credit markets, and fixed income securities',
-            requiredScope: 'fi_analyst',
-            icon: 'FI'
-        },
-        {
-            id: 'esg',
-            label: 'ESG Research',
-            description: 'Environmental, social, and governance factors in investing',
-            requiredScope: 'esg_analyst',
-            icon: 'ESG'
-        }
+    const allTopics = [
+        'macro',
+        'equity',
+        'fixed_income',
+        'esg'
     ];
 
-    let availableTopics: TopicCard[] = [];
-    let isAnalyst = false;
-
-    $: {
-        if ($auth.user?.scopes) {
-            // Filter topics based on user's analyst scopes (admin doesn't get automatic access)
-            availableTopics = allTopics.filter(topic =>
-                $auth.user?.scopes?.includes(topic.requiredScope)
-            );
-            isAnalyst = availableTopics.length > 0;
-        }
-    }
-
-    // Redirect if not an analyst
-    $: if ($auth.isAuthenticated && !isAnalyst) {
-        goto('/');
-    }
-
-    function navigateToTopic(topicId: string) {
-        goto(`/analyst/${topicId}`);
+    function hasTopicAccess(topic: string): boolean {
+        if (!$auth.user?.scopes) return false;
+        // Only analyst role grants access to analyst dashboard
+        return $auth.user.scopes.includes(`${topic}:analyst`);
     }
 
     onMount(() => {
         if (!$auth.isAuthenticated) {
+            goto('/');
+            return;
+        }
+
+        // Find first available topic for user
+        const firstTopic = allTopics.find(topic => hasTopicAccess(topic));
+
+        if (firstTopic) {
+            // Redirect to first available topic
+            goto(`/analyst/${firstTopic}`);
+        } else {
+            // No analyst permissions, redirect home
             goto('/');
         }
     });
 </script>
 
 <div class="analyst-container">
-    <header class="analyst-header">
-        <div>
-            <h1>Analyst Dashboard</h1>
-            <p class="subtitle">Manage and create research content</p>
-        </div>
-    </header>
-
-    {#if availableTopics.length === 0}
-        <div class="empty-state">
-            <h2>No Access</h2>
-            <p>You do not have analyst permissions for any research areas.</p>
-            <p>Please contact an administrator to request access.</p>
-        </div>
-    {:else}
-        <div class="topics-grid">
-            {#each availableTopics as topic}
-                <button class="topic-card" on:click={() => navigateToTopic(topic.id)}>
-                    <div class="topic-icon">{topic.icon}</div>
-                    <h3>{topic.label}</h3>
-                    <p>{topic.description}</p>
-                    <div class="topic-action">
-                        View Content →
-                    </div>
-                </button>
-            {/each}
-        </div>
-
-        {#if $auth.user?.scopes?.includes('admin')}
-            <div class="admin-notice">
-                <strong>Note:</strong> You also have admin access. Visit the <a href="/admin">Admin Panel</a> for user management and system configuration.
-            </div>
-        {/if}
-    {/if}
+    <div class="loading">
+        Redirecting to analyst dashboard...
+    </div>
 </div>
 
 <style>
+    :global(body) {
+        background: #fafafa;
+    }
+
     .analyst-container {
         max-width: 1200px;
         margin: 0 auto;
-        padding: 3rem 2rem;
-        background: #fafafa;
+        background: white;
         min-height: 100vh;
     }
 

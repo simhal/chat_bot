@@ -2,7 +2,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/stores/auth';
-    import { getArticle, editArticle, chatWithContentAgent } from '$lib/api';
+    import { getArticle, editArticle, chatWithContentAgent, approveArticle } from '$lib/api';
     import { onMount } from 'svelte';
     import Markdown from '$lib/components/Markdown.svelte';
 
@@ -15,6 +15,7 @@
         rating: number | null;
         rating_count: number;
         keywords: string | null;
+        status: string;  // draft, editor, or published
         created_at: string;
         updated_at: string;
         created_by_agent: string;
@@ -37,6 +38,7 @@
     let editHeadline = '';
     let editContent = '';
     let editKeywords = '';
+    let editStatus = 'draft';
 
     // Chat interface
     let chatMessages: ChatMessage[] = [];
@@ -52,15 +54,13 @@
     function canEditTopic(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
 
-        // Check for specific analyst permission (admin doesn't get automatic access)
-        const topicMap: Record<string, string> = {
-            'macro': 'macro_analyst',
-            'equity': 'equity_analyst',
-            'fixed_income': 'fi_analyst',
-            'esg': 'esg_analyst'
-        };
+        // Global admin can edit all topics
+        if ($auth.user.scopes.includes('global:admin')) return true;
 
-        return $auth.user.scopes.includes(topicMap[topic]);
+        // Check for admin, analyst, or editor role for the topic
+        return $auth.user.scopes.includes(`${topic}:admin`) ||
+               $auth.user.scopes.includes(`${topic}:analyst`) ||
+               $auth.user.scopes.includes(`${topic}:editor`);
     }
 
     async function loadArticle() {
@@ -77,10 +77,23 @@
             editHeadline = article.headline;
             editContent = article.content;
             editKeywords = article.keywords || '';
+            editStatus = article.status || 'draft';
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to load article';
         } finally {
             loading = false;
+        }
+    }
+
+    
+
+    async function handleApprove() {
+        if (!article) return;
+        try {
+            await approveArticle(article.id);
+            goto(`/analyst/${article.topic}`);
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to approve article';
         }
     }
 
@@ -90,7 +103,7 @@
         try {
             saving = true;
             error = '';
-            await editArticle(article.id, editHeadline, editContent, editKeywords);
+            await editArticle(article.id, editHeadline, editContent, editKeywords, editStatus);
 
             // Reload article to get updated data
             await loadArticle();
@@ -215,6 +228,11 @@
                 <button class="save-btn" on:click={handleSave} disabled={saving}>
                     {saving ? 'Saving...' : 'Save Changes'}
                 </button>
+                {#if article.status === 'draft'}
+                    <button class="approve-btn" on:click={handleApprove}>
+                        Approve
+                    </button>
+                {/if}
             </div>
         </header>
 
@@ -246,6 +264,18 @@
                             placeholder="keyword1, keyword2, keyword3"
                             maxlength="500"
                         />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="status">Status</label>
+                        <select
+                            id="status"
+                            bind:value={editStatus}
+                        >
+                            <option value="draft">Draft</option>
+                            <option value="editor">Editor Review</option>
+                            <option value="published">Published</option>
+                        </select>
                     </div>
 
                     <div class="form-group flex-grow">
@@ -459,6 +489,21 @@
         font-weight: 500;
         font-size: 0.875rem;
         transition: all 0.2s;
+    }
+
+    .approve-btn {
+        padding: 0.5rem 1rem;
+        background: #10b981;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .approve-btn:hover {
+        background: #059669;
     }
 
     .save-btn:hover:not(:disabled) {

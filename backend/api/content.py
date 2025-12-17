@@ -19,11 +19,14 @@ class ArticleResponse(BaseModel):
     id: int
     topic: str
     headline: str
+    author: Optional[str]
+    editor: Optional[str]
     content: str
     readership_count: int
     rating: Optional[int]
     rating_count: int
     keywords: Optional[str]
+    status: str  # draft, editor, or published
     created_at: str
     updated_at: str
     created_by_agent: str
@@ -38,6 +41,9 @@ class EditArticleRequest(BaseModel):
     headline: Optional[str] = None
     content: Optional[str] = None
     keywords: Optional[str] = None
+    author: Optional[str] = None
+    editor: Optional[str] = None
+    status: Optional[str] = None  # draft, editor, or published
 
 
 class CreateContentRequest(BaseModel):
@@ -232,26 +238,36 @@ async def rate_article(
 @router.get("/search/{topic}")
 async def search_articles(
     topic: str,
-    q: str,
+    q: Optional[str] = None,
+    headline: Optional[str] = None,
+    keywords: Optional[str] = None,
+    author: Optional[str] = None,
+    created_after: Optional[str] = None,
+    created_before: Optional[str] = None,
     limit: int = 10,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
     """
-    Search articles by headline and keywords.
+    Advanced search for articles with multiple criteria.
 
     Args:
-        topic: Topic name (macro, equity, fixed_income, esg)
-        q: Search query
+        topic: Topic name (macro, equity, fixed_income, esg, all) - use 'all' to search across all topics
+        q: General search query (searches headline, keywords, and content via vector search)
+        headline: Filter by headline (partial match)
+        keywords: Filter by keywords (partial match)
+        author: Filter by author name (partial match)
+        created_after: Filter articles created after this date (ISO format, e.g., 2024-01-01)
+        created_before: Filter articles created before this date (ISO format)
         limit: Maximum number of results (default: 10, max: 50)
         db: Database session
         user: Current authenticated user
 
     Returns:
-        List of matching articles
+        List of matching articles (default: 10 most relevant)
     """
     # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    valid_topics = ["macro", "equity", "fixed_income", "esg", "all"]
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -261,8 +277,21 @@ async def search_articles(
     # Limit max results
     limit = min(limit, 50)
 
-    # Search articles
-    articles = ContentService.search_articles(db, topic, q, limit)
+    # Convert 'all' to None for the service layer
+    search_topic = None if topic == "all" else topic
+
+    # Search articles with all criteria
+    articles = ContentService.search_articles(
+        db=db,
+        topic=search_topic,
+        query=q,
+        headline=headline,
+        keywords=keywords,
+        author=author,
+        created_after=created_after,
+        created_before=created_before,
+        limit=limit
+    )
 
     return articles
 
@@ -335,6 +364,33 @@ async def admin_delete_article(
         )
 
 
+@router.post("/admin/article/{article_id}/reactivate")
+async def admin_reactivate_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Reactivate a soft-deleted article.
+
+    Args:
+        article_id: Article ID to reactivate
+        db: Database session
+        admin: Current admin user
+
+    Returns:
+        Success message
+    """
+    try:
+        ContentService.reactivate_article(db, article_id)
+        return {"message": f"Article {article_id} reactivated successfully"}
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+
+
 @router.put("/article/{article_id}/edit", response_model=ArticleResponse)
 async def edit_article(
     article_id: int,
@@ -374,7 +430,10 @@ async def edit_article(
             article_id=article_id,
             headline=request.headline,
             content=request.content,
-            keywords=request.keywords
+            keywords=request.keywords,
+            author=request.author,
+            editor=request.editor,
+            status=request.status
         )
         return updated_article
     except ValueError as e:
@@ -595,4 +654,227 @@ async def download_article_pdf(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating PDF: {str(e)}"
+        )
+
+
+# Editorial workflow endpoints
+
+@router.get("/analyst/articles/{topic}", response_model=List[ArticleResponse])
+async def get_analyst_draft_articles(
+    topic: str,
+    offset: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Get draft articles for analyst view. Requires analyst permission for the topic.
+    """
+    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic. Must be one of: {valid_topics}"
+        )
+    
+    # Check analyst permission
+    analyst_check = require_analyst(topic)
+    analyst_check(user)
+    
+    limit = min(limit, 100)
+    articles = ContentService.get_articles_by_status(db, topic, "draft", offset, limit)
+    return articles
+
+
+@router.get("/editor/articles/{topic}", response_model=List[ArticleResponse])
+async def get_editor_articles(
+    topic: str,
+    offset: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Get articles in 'editor' status for editor review. Requires editor permission.
+    """
+    from dependencies import require_editor
+    
+    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic. Must be one of: {valid_topics}"
+        )
+    
+    # Check editor permission
+    editor_check = require_editor(topic)
+    editor_check(user)
+    
+    limit = min(limit, 100)
+    articles = ContentService.get_articles_by_status(db, topic, "editor", offset, limit)
+    return articles
+
+
+@router.get("/published/articles/{topic}", response_model=List[ArticleResponse])
+async def get_published_articles(
+    topic: str,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Get published articles for a topic. Available to all authenticated users.
+    """
+    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic. Must be one of: {valid_topics}"
+        )
+    
+    limit = min(limit, 50)
+    articles = ContentService.get_published_articles(db, topic, limit)
+    return articles
+
+
+@router.post("/article/{article_id}/approve")
+async def approve_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Approve a draft article (moves to 'editor' status). Requires analyst permission.
+    """
+    # Get article to check topic
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    
+    # Check analyst permission for this topic
+    analyst_check = require_analyst(article["topic"])
+    analyst_check(user)
+    
+    # Verify article is in draft status
+    if article["status"] != "draft":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only draft articles can be submitted"
+        )
+    
+    try:
+        # Use submit_article which sets author to submitter's email
+        author_email = user.get("email", "")
+        updated = ContentService.submit_article(db, article_id, author_email)
+        return {"message": "Article submitted for review", "article": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/article/{article_id}/reject")
+async def reject_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Reject an article in editor review (moves back to 'draft' status). Requires editor permission.
+    """
+    from dependencies import require_editor
+    
+    # Get article to check topic
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    
+    # Check editor permission for this topic
+    editor_check = require_editor(article["topic"])
+    editor_check(user)
+    
+    # Verify article is in editor status
+    if article["status"] != "editor":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only articles in editor review can be rejected"
+        )
+    
+    try:
+        updated = ContentService.update_article_status(db, article_id, "draft")
+        return {"message": "Article rejected and sent back to draft", "article": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/article/{article_id}/publish")
+async def publish_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Publish an article (moves from 'editor' to 'published' status). Requires editor permission.
+    """
+    from dependencies import require_editor
+    
+    # Get article to check topic
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+    
+    # Check editor permission for this topic
+    editor_check = require_editor(article["topic"])
+    editor_check(user)
+    
+    # Verify article is in editor status
+    if article["status"] != "editor":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only articles in editor review can be published"
+        )
+    
+    try:
+        # Use publish_article_with_editor which sets editor to publisher's email
+        editor_email = user.get("email", "")
+        updated = ContentService.publish_article_with_editor(db, article_id, editor_email)
+        return {"message": "Article published successfully", "article": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/admin/article/{article_id}/recall")
+async def admin_recall_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Recall a published article (move back to draft status).
+    """
+    try:
+        updated = ContentService.recall_article(db, article_id)
+        return {"message": f"Article {article_id} recalled to draft", "article": updated}
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+
+@router.delete("/admin/article/{article_id}/purge")
+async def admin_purge_article(
+    article_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Permanently delete an article and all related data.
+    This action cannot be undone.
+    """
+    try:
+        ContentService.purge_article(db, article_id)
+        return {"message": f"Article {article_id} permanently deleted"}
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
         )
