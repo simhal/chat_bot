@@ -1,14 +1,18 @@
-"""Main chat agent that uses existing articles for responses."""
+"""Main chat agent that uses existing articles and resources for responses."""
 
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, TYPE_CHECKING
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 from services.prompt_service import PromptService
 from services.google_search_service import GoogleSearchService
 from services.content_service import ContentService
+from services.resource_service import ResourceService
 import json
 import logging
+
+if TYPE_CHECKING:
+    from agents.resource_query_agent import ResourceQueryAgent
 
 logger = logging.getLogger("uvicorn")
 
@@ -17,8 +21,9 @@ class MainChatAgent:
     """
     Main chat agent that:
     1. Has customizable prompt template (global + user-specific)
-    2. Searches existing articles to answer queries
+    2. Searches existing articles and resources to answer queries
     3. Includes article references with links in responses
+    4. Uses ResourceQueryAgents for semantic search of resources
     """
 
     def __init__(
@@ -26,7 +31,8 @@ class MainChatAgent:
         user_id: int,
         llm: ChatOpenAI,
         google_search_service: GoogleSearchService,
-        db: Session
+        db: Session,
+        resource_query_agents: Optional[List["ResourceQueryAgent"]] = None
     ):
         """
         Initialize main chat agent.
@@ -36,11 +42,13 @@ class MainChatAgent:
             llm: ChatOpenAI LLM instance
             google_search_service: Google Search service
             db: Database session
+            resource_query_agents: Optional list of ResourceQueryAgents for querying resources
         """
         self.user_id = user_id
         self.llm = llm
         self.google_search = google_search_service
         self.db = db
+        self.resource_query_agents = resource_query_agents or []
 
         # Get personalized system prompt
         self.system_prompt = PromptService.get_main_chat_template(user_id)
@@ -107,10 +115,22 @@ class MainChatAgent:
             logger.info(f"✓ ARTICLE SEARCH COMPLETE: {search_time:.2f}s")
             logger.info(f"   Found {len(articles)} relevant articles")
 
-            # Use found articles to craft response
-            logger.info(f"📝 SYNTHESIZING: Crafting response using article content...")
+            # Search for relevant resources
+            resources = []
+            if self.resource_query_agents:
+                logger.info(f"📚 SEARCHING RESOURCES: Looking for relevant resources...")
+                resource_start = time.time()
+                resources = self._search_relevant_resources(user_message)
+                resource_time = time.time() - resource_start
+                logger.info(f"✓ RESOURCE SEARCH COMPLETE: {resource_time:.2f}s")
+                logger.info(f"   Found {len(resources)} relevant resources")
+
+            # Use found articles and resources to craft response
+            logger.info(f"📝 SYNTHESIZING: Crafting response using content...")
             synthesis_start = time.time()
-            final_response = self._synthesize_response_from_articles(user_message, articles, agent_type)
+            final_response = self._synthesize_response_from_content(
+                user_message, articles, resources, agent_type
+            )
             synthesis_time = time.time() - synthesis_start
             logger.info(f"✓ SYNTHESIS COMPLETE: {synthesis_time:.2f}s")
 
@@ -122,7 +142,8 @@ class MainChatAgent:
                 'response': final_response,
                 'agent_type': agent_type,
                 'routing_reason': routing_reason,
-                'articles': articles
+                'articles': articles,
+                'resources': resources
             }
 
     def _handle_general_chat(self, user_message: str) -> str:
@@ -172,45 +193,104 @@ class MainChatAgent:
             logger.error(f"Error searching articles: {e}")
             return []
 
+    def _search_relevant_resources(self, query: str) -> List[Dict]:
+        """
+        Search for relevant resources using ResourceQueryAgents.
+
+        Args:
+            query: Search query
+
+        Returns:
+            List of relevant resources with their content
+        """
+        if not self.resource_query_agents:
+            return []
+
+        all_resources = []
+
+        for agent in self.resource_query_agents:
+            try:
+                result = agent.query(query, limit=3)
+                if result.get("success") and result.get("resources"):
+                    all_resources.extend(result["resources"])
+            except Exception as e:
+                logger.error(f"Error querying resources with {agent.__class__.__name__}: {e}")
+
+        # Sort by similarity score and deduplicate
+        all_resources.sort(key=lambda x: x.get("similarity_score", 0), reverse=True)
+
+        # Take top results
+        return all_resources[:5]
+
     def _synthesize_response_from_articles(self, user_query: str, articles: List[Dict], agent_type: str) -> str:
         """
         Use existing articles to craft a specific answer to the user's query.
+        Deprecated: Use _synthesize_response_from_content instead.
+        """
+        return self._synthesize_response_from_content(user_query, articles, [], agent_type)
+
+    def _synthesize_response_from_content(
+        self,
+        user_query: str,
+        articles: List[Dict],
+        resources: List[Dict],
+        agent_type: str
+    ) -> str:
+        """
+        Use existing articles and resources to craft a specific answer to the user's query.
 
         Args:
             user_query: User's original question
             articles: List of relevant articles
+            resources: List of relevant resources (text, tables)
             agent_type: Type of topic (macro, equity, fixed_income, esg)
 
         Returns:
-            Response based on article content
+            Response based on article and resource content
         """
-        if not articles:
-            # No articles found, provide general response
+        if not articles and not resources:
+            # No content found, provide general response
             return self._handle_general_chat(user_query)
 
         # Build article content for synthesis
         articles_content = ""
-        for i, article in enumerate(articles, 1):
-            articles_content += f"\nArticle {i}: {article['headline']}\n"
-            articles_content += f"Keywords: {article.get('keywords', 'N/A')}\n"
-            articles_content += f"Content: {article['content'][:500]}...\n"
-            articles_content += f"---\n"
+        if articles:
+            articles_content = "\n### Articles from Knowledge Base:\n"
+            for i, article in enumerate(articles, 1):
+                articles_content += f"\nArticle {i}: {article['headline']}\n"
+                articles_content += f"Keywords: {article.get('keywords', 'N/A')}\n"
+                articles_content += f"Content: {article['content'][:500]}...\n"
+                articles_content += f"---\n"
+
+        # Build resource content for synthesis
+        resources_content = ""
+        if resources:
+            resources_content = "\n### Resources from Knowledge Base:\n"
+            for i, resource in enumerate(resources, 1):
+                resources_content += f"\nResource {i}: {resource.get('name', 'Unnamed')}"
+                resources_content += f" (Type: {resource.get('type', 'unknown')})\n"
+                resources_content += f"Relevance: {resource.get('similarity_score', 0):.2f}\n"
+                preview = resource.get('content_preview', '')[:400]
+                resources_content += f"Content: {preview}...\n"
+                resources_content += f"---\n"
 
         synthesis_prompt = f"""You are a helpful financial assistant. A user has asked a question related to {agent_type} research.
 
-Your task: Use the following articles from our research database to provide a direct, specific answer to the user's question. Be conversational and helpful.
+Your task: Use the following content from our knowledge base to provide a direct, specific answer to the user's question. Be conversational and helpful.
 
 User's Question: {user_query}
 
-Available Articles:
 {articles_content}
+{resources_content}
 
 Instructions:
-1. Directly answer the user's specific question using information from the articles
+1. Directly answer the user's specific question using information from the articles and resources
 2. Be concise but informative
 3. Maintain a helpful, conversational tone
-4. Do NOT include article references or links in your response - they will be added automatically
-5. Focus on synthesizing information from the articles to answer the question
+4. Prioritize information from higher relevance resources and more recent articles
+5. If resources contain data (tables, statistics), incorporate that data into your response
+6. Do NOT include article/resource references or links in your response - they will be added automatically
+7. Focus on synthesizing information to answer the question
 
 Provide your response:"""
 

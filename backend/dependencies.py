@@ -185,3 +185,82 @@ def require_editor(topic: str):
         )
 
     return check_editor_permission
+
+
+def require_topic_admin(topic: str):
+    """
+    Dependency factory to require admin role for a specific topic.
+    Global admins also have access.
+
+    Args:
+        topic: Topic name (macro, equity, fixed_income, esg)
+
+    Returns:
+        Dependency function that checks for topic admin permissions
+    """
+    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+
+    def check_topic_admin_permission(user: dict = Depends(get_current_user)) -> dict:
+        """
+        Check if user has admin permission for the topic.
+        """
+        scopes = user.get("scopes", [])
+
+        # Global admin can access all content
+        if is_global_admin(scopes):
+            return user
+
+        # Validate topic
+        if topic not in valid_topics:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid topic: {topic}"
+            )
+
+        # Check if user has admin role for this topic
+        if has_role(scopes, topic, "admin"):
+            return user
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied. You need '{topic}:admin' role to manage {topic} prompts."
+        )
+
+    return check_topic_admin_permission
+
+
+def can_edit_prompt(prompt_type: str, prompt_group: str = None):
+    """
+    Dependency factory to check if user can edit a specific prompt type.
+
+    Permission rules:
+    - global:admin can edit all prompts
+    - {topic}:admin can edit content_topic prompts for their topic only
+    - Users cannot edit any prompts
+
+    Args:
+        prompt_type: Type of prompt (general, chat_specific, content_topic, tonality, etc.)
+        prompt_group: For content_topic, the topic name (macro, equity, etc.)
+
+    Returns:
+        Dependency function that checks for edit permissions
+    """
+    def check_prompt_edit_permission(user: dict = Depends(get_current_user)) -> dict:
+        scopes = user.get("scopes", [])
+
+        # Global admin can edit all prompts
+        if is_global_admin(scopes):
+            return user
+
+        # For content_topic prompts, topic admin can edit their topic
+        if prompt_type == "content_topic" and prompt_group:
+            if has_role(scopes, prompt_group, "admin"):
+                return user
+
+        # All other cases require global admin
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to edit this prompt"
+        )
+
+    return check_prompt_edit_permission

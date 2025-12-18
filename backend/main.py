@@ -113,10 +113,14 @@ try:
     from api.admin_prompts import router as admin_prompts_router
     from api.user_profile import router as user_profile_router
     from api.content import router as content_router
+    from api.prompts import router as prompts_router
+    from api.resources import router as resources_router
 
     app.include_router(admin_prompts_router)
     app.include_router(user_profile_router)
     app.include_router(content_router)
+    app.include_router(prompts_router)
+    app.include_router(resources_router)
 except ImportError as e:
     print(f"Warning: Multi-agent API routers not available: {e}")
 
@@ -693,10 +697,156 @@ async def list_users(
             "name": user.name,
             "surname": user.surname,
             "groups": [g.name for g in user.groups],
-            "created_at": user.created_at.isoformat()
+            "created_at": user.created_at.isoformat(),
+            "active": user.active,
+            "last_access_at": user.last_access_at.isoformat() if user.last_access_at else None,
+            "is_pending": user.linkedin_sub.startswith("pending_") if user.linkedin_sub else True
         }
         for user in users
     ]
+
+
+class CreateUserRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    surname: Optional[str] = None
+
+
+@app.post("/api/admin/users")
+async def create_user(
+    request: CreateUserRequest,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Create a new user manually (before OAuth login).
+    The user will have a placeholder linkedin_sub until they log in via OAuth.
+    Requires admin scope.
+    """
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == request.email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"User with email {request.email} already exists"
+        )
+
+    # Create user with placeholder linkedin_sub
+    import uuid
+    placeholder_sub = f"pending_{uuid.uuid4().hex[:16]}"
+
+    user = User(
+        email=request.email,
+        name=request.name,
+        surname=request.surname,
+        linkedin_sub=placeholder_sub,
+        active=True
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    logger.info(f"Admin created user: {request.email}")
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "surname": user.surname,
+        "groups": [],
+        "created_at": user.created_at.isoformat(),
+        "active": user.active,
+        "is_pending": True
+    }
+
+
+@app.put("/api/admin/users/{user_id}/ban")
+async def ban_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Ban a user (set active=False). Requires admin scope.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Don't allow banning yourself
+    admin_user_id = int(admin.get("sub", 0))
+    if user.id == admin_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot ban yourself"
+        )
+
+    user.active = False
+    db.commit()
+
+    logger.info(f"Admin banned user: {user.email}")
+
+    return {"message": f"User {user.email} has been banned", "active": False}
+
+
+@app.put("/api/admin/users/{user_id}/unban")
+async def unban_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Unban a user (set active=True). Requires admin scope.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    user.active = True
+    db.commit()
+
+    logger.info(f"Admin unbanned user: {user.email}")
+
+    return {"message": f"User {user.email} has been unbanned", "active": True}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Delete a user. Requires admin scope.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+
+    # Don't allow deleting yourself
+    admin_user_id = int(admin.get("sub", 0))
+    if user.id == admin_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot delete yourself"
+        )
+
+    email = user.email
+    db.delete(user)
+    db.commit()
+
+    logger.info(f"Admin deleted user: {email}")
+
+    return {"message": f"User {email} has been deleted"}
 
 
 if __name__ == "__main__":
