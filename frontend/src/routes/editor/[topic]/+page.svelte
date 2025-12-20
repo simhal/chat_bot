@@ -29,7 +29,7 @@
     let loading = true;
     let error = '';
     let selectedArticle: Article | null = null;
-    const topics = [
+    const allTopics = [
         { id: 'macro' as Topic, label: 'Macroeconomic' },
         { id: 'equity' as Topic, label: 'Equity' },
         { id: 'fixed_income' as Topic, label: 'Fixed Income' },
@@ -43,6 +43,20 @@
         'esg': 'ESG Research'
     };
 
+    // Get user scopes reactively
+    $: userScopes = $auth.user?.scopes || [];
+
+    // Check if user has editor access to a specific topic
+    function hasEditorAccess(topic: string, scopes: string[]): boolean {
+        if (!scopes.length) return false;
+        // Only show for users with explicit editor role for that topic
+        return scopes.includes(`${topic}:editor`);
+    }
+
+    // Filter topics to only show ones where user has editor access
+    // Using userScopes in the reactive statement ensures proper reactivity
+    $: topics = allTopics.filter(t => hasEditorAccess(t.id, userScopes));
+
     // Get topic from URL parameter
     $: currentTopic = $page.params.topic as Topic;
 
@@ -50,21 +64,8 @@
         goto(`/editor/${topic}`);
     }
 
-    // Check if user can access this topic
-    function canAccessTopic(topic: string): boolean {
-        if (!$auth.user?.scopes) return false;
-
-        // Global admin can access all topics
-        if ($auth.user.scopes.includes('global:admin')) return true;
-
-        // Check for admin, analyst, or editor role for the topic
-        return $auth.user.scopes.includes(`${topic}:admin`) ||
-               $auth.user.scopes.includes(`${topic}:editor`) ||
-               $auth.user.scopes.includes(`${topic}:editor`);
-    }
-
-    // Redirect if user doesn't have permission
-    $: if ($auth.isAuthenticated && currentTopic && !canAccessTopic(currentTopic)) {
+    // Redirect if user doesn't have permission for current topic
+    $: if ($auth.isAuthenticated && currentTopic && !hasEditorAccess(currentTopic, userScopes)) {
         goto('/editor');
     }
 
@@ -420,25 +421,28 @@
     .empty-state {
         text-align: center;
         padding: 4rem 2rem;
+        margin: 0 2rem 2rem 2rem;
         background: white;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
     }
 
     .empty-state h2 {
-        color: #333;
+        color: #1a1a1a;
         margin-bottom: 1rem;
+        font-weight: 600;
     }
 
     .empty-state p {
-        color: #666;
+        color: #6b7280;
         font-size: 1rem;
     }
 
     .articles-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-        gap: 1.5rem;
+        gap: 1rem;
+        padding: 0 2rem 2rem 2rem;
     }
 
     .article-card {
@@ -450,7 +454,7 @@
     }
 
     .article-card:hover {
-        border-color: #d1d5db;
+        border-color: #3b82f6;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     }
 

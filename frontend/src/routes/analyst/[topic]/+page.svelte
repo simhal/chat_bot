@@ -1,10 +1,11 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, generateContent, downloadArticlePDF, approveArticle } from '$lib/api';
+    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, generateContent, downloadArticlePDF, approveArticle, getGroupResources, type Resource } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
+    import ResourceEditor from '$lib/components/ResourceEditor.svelte';
 
     type Topic = 'macro' | 'equity' | 'fixed_income' | 'esg';
 
@@ -32,6 +33,10 @@
     let showGenerateModal = false;
     let generateQuery = '';
     let isGenerating = false;
+
+    // Resources for generation
+    let generateResources: Resource[] = [];
+    let resourcesLoading = false;
 
     const topics = [
         { id: 'macro' as Topic, label: 'Macroeconomic' },
@@ -119,6 +124,33 @@
         goto(`/analyst/edit/${articleId}`);
     }
 
+    async function loadGenerateResources() {
+        try {
+            resourcesLoading = true;
+            // Load resources from the topic's group
+            const response = await getGroupResources(currentTopic);
+            generateResources = response.resources;
+        } catch (e) {
+            console.error('Failed to load resources:', e);
+            generateResources = [];
+        } finally {
+            resourcesLoading = false;
+        }
+    }
+
+    async function openGenerateModal() {
+        showGenerateModal = true;
+        await loadGenerateResources();
+    }
+
+    function handleResourceRefresh() {
+        loadGenerateResources();
+    }
+
+    function handleResourceError(event: CustomEvent<string>) {
+        error = event.detail;
+    }
+
     async function handleGenerateContent() {
         if (!generateQuery.trim()) return;
 
@@ -129,6 +161,7 @@
             await loadArticles();
             showGenerateModal = false;
             generateQuery = '';
+            generateResources = [];
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to generate content';
         } finally {
@@ -179,7 +212,7 @@
                 </button>
             {/each}
         </nav>
-        <button class="generate-btn" on:click={() => showGenerateModal = true}>
+        <button class="generate-btn" on:click={openGenerateModal}>
             + Generate Content
         </button>
     </div>
@@ -339,37 +372,58 @@
 
 <!-- Generate Content Modal -->
 {#if showGenerateModal}
-    <div class="modal-overlay" on:click={() => { showGenerateModal = false; generateQuery = ''; }}>
-        <div class="modal" on:click|stopPropagation>
-            <h3>Generate New {topicLabels[currentTopic]} Content</h3>
-            <p class="modal-description">
-                Use the content agent to research and create a new article.
-                Enter a topic or question below.
-            </p>
-
-            <div class="form-group">
-                <label for="generate-query">Topic / Question</label>
-                <textarea
-                    id="generate-query"
-                    bind:value={generateQuery}
-                    placeholder="Example: Impact of rising interest rates on tech stocks"
-                    rows="4"
-                    disabled={isGenerating}
-                ></textarea>
+    <div class="modal-overlay" on:click={() => { showGenerateModal = false; generateQuery = ''; generateResources = []; }}>
+        <div class="modal generate-modal" on:click|stopPropagation>
+            <div class="modal-header">
+                <h3>Generate New {topicLabels[currentTopic]} Content</h3>
+                <button class="close-btn" on:click={() => { showGenerateModal = false; generateQuery = ''; generateResources = []; }}>×</button>
             </div>
 
-            {#if isGenerating}
-                <div class="generating-indicator">
-                    <div class="spinner"></div>
-                    <p>Researching and generating content... This may take a minute.</p>
+            <div class="generate-modal-body">
+                <p class="modal-description">
+                    Use the content agent to research and create a new article.
+                    You can add resources that will be used as context for generation.
+                </p>
+
+                <div class="form-group">
+                    <label for="generate-query">Topic / Question</label>
+                    <textarea
+                        id="generate-query"
+                        bind:value={generateQuery}
+                        placeholder="Example: Impact of rising interest rates on tech stocks"
+                        rows="3"
+                        disabled={isGenerating}
+                    ></textarea>
                 </div>
-            {/if}
+
+                <!-- Resources Section -->
+                <div class="resources-section">
+                    <h4>Resources</h4>
+                    <p class="resources-hint">Upload or paste resources to use as context for content generation. These will be added to the {currentTopic} shared resources.</p>
+                    <ResourceEditor
+                        resources={generateResources}
+                        groupName="{currentTopic}:admin"
+                        loading={resourcesLoading}
+                        showDeleteButton={true}
+                        showUnlinkButton={false}
+                        on:refresh={handleResourceRefresh}
+                        on:error={handleResourceError}
+                    />
+                </div>
+
+                {#if isGenerating}
+                    <div class="generating-indicator">
+                        <div class="spinner"></div>
+                        <p>Researching and generating content... This may take a minute.</p>
+                    </div>
+                {/if}
+            </div>
 
             <div class="modal-actions">
                 <button on:click={handleGenerateContent} disabled={!generateQuery.trim() || isGenerating}>
                     {isGenerating ? 'Generating...' : 'Generate Article'}
                 </button>
-                <button on:click={() => { showGenerateModal = false; generateQuery = ''; }} disabled={isGenerating}>
+                <button on:click={() => { showGenerateModal = false; generateQuery = ''; generateResources = []; }} disabled={isGenerating}>
                     Cancel
                 </button>
             </div>
@@ -507,25 +561,28 @@
     .empty-state {
         text-align: center;
         padding: 4rem 2rem;
+        margin: 0 2rem 2rem 2rem;
         background: white;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
     }
 
     .empty-state h2 {
-        color: #333;
+        color: #1a1a1a;
         margin-bottom: 1rem;
+        font-weight: 600;
     }
 
     .empty-state p {
-        color: #666;
+        color: #6b7280;
         font-size: 1rem;
     }
 
     .articles-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-        gap: 1.5rem;
+        gap: 1rem;
+        padding: 0 2rem 2rem 2rem;
     }
 
     .article-card {
@@ -537,7 +594,7 @@
     }
 
     .article-card:hover {
-        border-color: #d1d5db;
+        border-color: #3b82f6;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     }
 
@@ -775,6 +832,35 @@
     .modal.large {
         min-width: 600px;
         max-width: 900px;
+    }
+
+    .modal.generate-modal {
+        min-width: 600px;
+        max-width: 800px;
+    }
+
+    .generate-modal-body {
+        padding: 1.5rem 2rem;
+        max-height: 70vh;
+        overflow-y: auto;
+    }
+
+    .resources-section {
+        margin-top: 1.5rem;
+        padding-top: 1.5rem;
+        border-top: 1px solid #e5e7eb;
+    }
+
+    .resources-section h4 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1rem;
+        color: #374151;
+    }
+
+    .resources-hint {
+        margin: 0 0 1rem 0;
+        font-size: 0.85rem;
+        color: #6b7280;
     }
 
     .modal-header {

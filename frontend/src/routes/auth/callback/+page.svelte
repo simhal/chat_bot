@@ -1,6 +1,6 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
-    import { goto } from '$app/navigation';
+    import { onMount, tick } from 'svelte';
+    import { goto, invalidateAll } from '$app/navigation';
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
     import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI, PUBLIC_API_URL } from '$env/static/public';
@@ -86,7 +86,11 @@
                 scopes: payload.scopes || []
             });
 
-            // Redirect to home page
+            // Wait for Svelte's reactivity to propagate the auth state update
+            await tick();
+
+            // Invalidate all load functions and redirect to home page
+            await invalidateAll();
             goto('/');
         } catch (e) {
             error = `Authentication failed: ${e instanceof Error ? e.message : 'Unknown error'}`;
