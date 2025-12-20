@@ -51,14 +51,7 @@
         limit: 10
     };
 
-    const tabs = [
-        { id: 'chat' as Tab, label: 'Chat' },
-        { id: 'search' as Tab, label: 'Search' },
-        { id: 'macro' as Tab, label: 'Macroeconomic' },
-        { id: 'equity' as Tab, label: 'Equity' },
-        { id: 'fixed_income' as Tab, label: 'Fixed Income' },
-        { id: 'esg' as Tab, label: 'ESG' }
-    ];
+    const validTabs: Tab[] = ['chat', 'search', 'macro', 'equity', 'fixed_income', 'esg'];
 
     function initiateLinkedInLogin() {
         const state = Math.random().toString(36).substring(7);
@@ -226,9 +219,11 @@
         const tabParam = urlParams.get('tab') as Tab | null;
         const hash = window.location.hash;
 
-        // Switch to tab if specified in URL
-        if (tabParam && tabs.some(t => t.id === tabParam)) {
+        // Switch to tab if specified in URL, otherwise default to chat
+        if (tabParam && validTabs.includes(tabParam)) {
             currentTab = tabParam;
+        } else {
+            currentTab = 'chat';
         }
 
         // Load articles for the current tab (but not for chat or search)
@@ -287,20 +282,7 @@
             </div>
         {:else}
             <div class="content-wrapper">
-                <!-- Tab Navigation -->
-                <nav class="tabs">
-                    {#each tabs as tab}
-                        <button
-                            class="tab"
-                            class:active={currentTab === tab.id}
-                            on:click={() => handleTabChange(tab.id)}
-                        >
-                            {tab.label}
-                        </button>
-                    {/each}
-                </nav>
-
-                <!-- Tab Content -->
+                <!-- Tab Content (navigation is in the header) -->
                 {#if error}
                     <div class="error-message">{error}</div>
                 {/if}
@@ -738,35 +720,6 @@
         background: white;
     }
 
-    /* Tabs */
-    .tabs {
-        display: flex;
-        border-bottom: 1px solid #e5e7eb;
-        background: white;
-    }
-
-    .tab {
-        padding: 1rem 1.5rem;
-        background: none;
-        border: none;
-        border-bottom: 2px solid transparent;
-        cursor: pointer;
-        font-size: 0.875rem;
-        font-weight: 500;
-        color: #6b7280;
-        transition: all 0.2s;
-    }
-
-    .tab:hover {
-        color: #1a1a1a;
-        background: #f9fafb;
-    }
-
-    .tab.active {
-        color: #3b82f6;
-        border-bottom-color: #3b82f6;
-    }
-
     .error-message {
         background: #fef2f2;
         color: #dc2626;
@@ -781,7 +734,7 @@
     .chat-container {
         display: flex;
         flex-direction: column;
-        height: calc(100vh - 120px);
+        height: calc(100vh - 60px);
     }
 
     .messages {
