@@ -2,11 +2,30 @@
 
 import redis
 import json
+import os
 from typing import Optional, List, Dict
 from pydantic_settings import BaseSettings
+from urllib.parse import urlparse
 import logging
 
 logger = logging.getLogger("uvicorn")
+
+
+def _parse_redis_url():
+    """Parse REDIS_URL environment variable to extract host, port, and db."""
+    redis_url = os.environ.get("REDIS_URL", "")
+    if redis_url:
+        try:
+            parsed = urlparse(redis_url)
+            return {
+                "host": parsed.hostname or "localhost",
+                "port": parsed.port or 6379,
+                "db": int(parsed.path.lstrip("/") or "1"),
+                "password": parsed.password
+            }
+        except Exception:
+            pass
+    return {"host": "localhost", "port": 6379, "db": 1, "password": None}
 
 
 class CacheSettings(BaseSettings):
@@ -20,6 +39,16 @@ class CacheSettings(BaseSettings):
         env_file = ".env"
         case_sensitive = False
         extra = "ignore"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Override with REDIS_URL if available
+        parsed = _parse_redis_url()
+        if os.environ.get("REDIS_URL"):
+            self.redis_host = parsed["host"]
+            self.redis_port = parsed["port"]
+            self.redis_db = parsed["db"] if parsed["db"] else 1
+            self.redis_password = parsed["password"]
 
 
 cache_settings = CacheSettings()

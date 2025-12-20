@@ -182,6 +182,22 @@ resource "aws_ecs_task_definition" "backend" {
         {
           name  = "OPENAI_MODEL"
           value = "gpt-4o-mini"
+        },
+        {
+          name  = "S3_BUCKET"
+          value = aws_s3_bucket.resources.id
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.aws_region
+        },
+        {
+          name  = "CHROMA_HOST"
+          value = "chroma.chatbot.local"
+        },
+        {
+          name  = "CHROMA_PORT"
+          value = "8000"
         }
       ]
 
@@ -216,9 +232,9 @@ resource "aws_ecs_task_definition" "backend" {
       healthCheck = {
         command     = ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
         interval    = 30
-        timeout     = 5
-        retries     = 3
-        startPeriod = 60
+        timeout     = 10
+        retries     = 5
+        startPeriod = 180
       }
     }
   ])
@@ -298,7 +314,10 @@ resource "aws_ecs_service" "backend" {
     container_port   = 8000
   }
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [
+    aws_lb_listener.https,
+    aws_ecs_service.chroma
+  ]
 
   lifecycle {
     ignore_changes = [desired_count]

@@ -63,6 +63,8 @@ services:
     #   - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
     env_file:
       - ./backend/.env
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,6 +101,7 @@ volumes:
   postgres_data:
   redis_data:
   chroma_data:
+  uploads_data:
 
 networks:
   default:

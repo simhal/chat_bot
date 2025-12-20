@@ -263,17 +263,24 @@ async def exchange_token(request: TokenExchangeRequest, db: Session = Depends(ge
                 user = db.query(User).filter(User.email == email).first()
 
                 if user and user.linkedin_sub and user.linkedin_sub != linkedin_sub:
-                    # User exists with same email but different linkedin_sub
-                    # This is a conflict - email must be unique
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Email {email} is already registered with a different LinkedIn account"
+                    # Check if this is a placeholder linkedin_sub that can be claimed
+                    is_claimable = (
+                        user.linkedin_sub.startswith("admin_") or
+                        user.linkedin_sub.startswith("seed_") or
+                        user.linkedin_sub.startswith("pending_")
                     )
+                    if not is_claimable:
+                        # User exists with same email but different linkedin_sub
+                        # This is a conflict - email must be unique
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Email {email} is already registered with a different LinkedIn account"
+                        )
 
             if user:
                 # Update existing user
-                # Only update linkedin_sub if it's empty or a placeholder (allows seed users to be claimed)
-                if not user.linkedin_sub or user.linkedin_sub.startswith("admin_") or user.linkedin_sub.startswith("seed_"):
+                # Only update linkedin_sub if it's empty or a placeholder (allows pre-created users to be claimed)
+                if not user.linkedin_sub or user.linkedin_sub.startswith("admin_") or user.linkedin_sub.startswith("seed_") or user.linkedin_sub.startswith("pending_"):
                     user.linkedin_sub = linkedin_sub
                     logger.info(f"Updated linkedin_sub for user: {email}")
 

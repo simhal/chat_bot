@@ -751,7 +751,8 @@ class ResourceService:
             hash_id: Public hash identifier
 
         Returns:
-            Tuple of (full_file_path, mime_type, filename) or None if not found/not a file
+            Tuple of (relative_file_path, mime_type, filename) or None if not found/not a file
+            Note: Returns relative path for use with StorageService (works with both local and S3)
         """
         resource = db.query(Resource).filter(
             Resource.hash_id == hash_id,
@@ -773,12 +774,9 @@ class ResourceService:
         if not resource.file_resource:
             return None
 
-        # Construct full path
-        upload_dir = os.environ.get("UPLOAD_DIR", "/app/uploads")
-        file_path = os.path.join(upload_dir, resource.file_resource.file_path)
-
+        # Return relative path (StorageService handles actual path/S3 key resolution)
         return (
-            file_path,
+            resource.file_resource.file_path,
             resource.file_resource.mime_type,
             resource.file_resource.filename
         )
@@ -830,7 +828,10 @@ class ResourceService:
                 "group_id": r.group_id,
                 "parent_id": r.parent_id,
                 "created_by": r.created_by,
-                "created_at": r.created_at.isoformat() if r.created_at else None
+                "modified_by": r.modified_by,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                "is_active": r.is_active
             })
 
         return results, total

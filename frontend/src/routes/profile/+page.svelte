@@ -1,6 +1,6 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getUserProfile, deleteUserAccount } from '$lib/api';
+    import { getUserProfile, deleteUserAccount, getTonalities, getUserTonality, updateUserTonality, type TonalityOption, type TonalityPreferences } from '$lib/api';
     import { goto } from '$app/navigation';
     import { onMount } from 'svelte';
 
@@ -27,6 +27,14 @@
     let loading = true;
     let error = '';
 
+    // Tonality settings
+    let tonalities: TonalityOption[] = [];
+    let userTonality: TonalityPreferences | null = null;
+    let selectedChatTonality: number | null = null;
+    let selectedContentTonality: number | null = null;
+    let tonalityLoading = false;
+    let tonalitySaving = false;
+
     // Redirect if not authenticated
     $: if (!$auth.isAuthenticated) {
         goto('/');
@@ -42,6 +50,39 @@
             console.error('Error loading profile:', e);
         } finally {
             loading = false;
+        }
+    }
+
+    async function loadTonalities() {
+        try {
+            tonalityLoading = true;
+            const [tonalitiesData, userTonalityData] = await Promise.all([
+                getTonalities(),
+                getUserTonality()
+            ]);
+            tonalities = tonalitiesData;
+            userTonality = userTonalityData;
+            selectedChatTonality = userTonalityData.chat_tonality?.id || null;
+            selectedContentTonality = userTonalityData.content_tonality?.id || null;
+        } catch (e) {
+            console.error('Error loading tonalities:', e);
+        } finally {
+            tonalityLoading = false;
+        }
+    }
+
+    async function saveTonalityPreferences() {
+        try {
+            tonalitySaving = true;
+            error = '';
+            await updateUserTonality(selectedChatTonality, selectedContentTonality);
+            // Reload to confirm changes
+            const updated = await getUserTonality();
+            userTonality = updated;
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to save tonality preferences';
+        } finally {
+            tonalitySaving = false;
         }
     }
 
@@ -76,6 +117,7 @@
 
     onMount(() => {
         loadUserProfile();
+        loadTonalities();
     });
 </script>
 
@@ -158,6 +200,55 @@
         <!-- Settings Tab -->
         {#if currentTab === 'settings'}
             <div class="settings-content">
+                <!-- Tonality Preferences -->
+                <div class="settings-section">
+                    <h3>Response Style Preferences</h3>
+                    <p class="section-description">Choose the communication style for AI responses. This affects how the chatbot and content generator write their responses.</p>
+
+                    {#if tonalityLoading}
+                        <div class="loading-small">Loading tonality options...</div>
+                    {:else}
+                        <div class="tonality-form">
+                            <div class="form-group">
+                                <label for="chat-tonality">Chat Response Style</label>
+                                <select id="chat-tonality" bind:value={selectedChatTonality}>
+                                    <option value={null}>Default (Professional)</option>
+                                    {#each tonalities as tonality}
+                                        <option value={tonality.id}>
+                                            {tonality.name}
+                                            {tonality.is_default ? '(Default)' : ''}
+                                        </option>
+                                    {/each}
+                                </select>
+                                <span class="help-text">Style used for chat conversations</span>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="content-tonality">Content Generation Style</label>
+                                <select id="content-tonality" bind:value={selectedContentTonality}>
+                                    <option value={null}>Default (Professional)</option>
+                                    {#each tonalities as tonality}
+                                        <option value={tonality.id}>
+                                            {tonality.name}
+                                            {tonality.is_default ? '(Default)' : ''}
+                                        </option>
+                                    {/each}
+                                </select>
+                                <span class="help-text">Style used for article generation</span>
+                            </div>
+
+                            <button
+                                class="save-btn"
+                                on:click={saveTonalityPreferences}
+                                disabled={tonalitySaving}
+                            >
+                                {tonalitySaving ? 'Saving...' : 'Save Preferences'}
+                            </button>
+                        </div>
+                    {/if}
+                </div>
+
+                <!-- Danger Zone -->
                 <div class="danger-zone">
                     <h3>Danger Zone</h3>
                     <p>Once you delete your account, there is no going back. This will permanently delete all your data.</p>
@@ -339,5 +430,91 @@
 
     .delete-account-btn:hover {
         background: #b91c1c;
+    }
+
+    /* Tonality Settings */
+    .settings-section {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .settings-section h3 {
+        margin: 0 0 0.5rem 0;
+        color: #1a1a1a;
+        font-size: 1.125rem;
+    }
+
+    .section-description {
+        color: #6b7280;
+        font-size: 0.875rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .loading-small {
+        color: #6b7280;
+        padding: 1rem 0;
+    }
+
+    .tonality-form {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        max-width: 400px;
+    }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .form-group label {
+        font-weight: 500;
+        color: #374151;
+        font-size: 0.875rem;
+    }
+
+    .form-group select {
+        padding: 0.625rem 0.75rem;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        background: white;
+        cursor: pointer;
+    }
+
+    .form-group select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .help-text {
+        font-size: 0.75rem;
+        color: #9ca3af;
+    }
+
+    .save-btn {
+        padding: 0.625rem 1.25rem;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+        align-self: flex-start;
+    }
+
+    .save-btn:hover:not(:disabled) {
+        background: #2563eb;
+    }
+
+    .save-btn:disabled {
+        background: #93c5fd;
+        cursor: not-allowed;
     }
 </style>

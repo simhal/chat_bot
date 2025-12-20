@@ -5,11 +5,10 @@
 
     const allTopics = ['macro', 'equity', 'fixed_income', 'esg'];
 
-    function hasEditorAccess(topic: string): boolean {
-        if (!$auth.user?.scopes) return false;
-        if ($auth.user.scopes.includes('global:admin')) return true;
-        return $auth.user.scopes.includes(`${topic}:admin`) ||
-               $auth.user.scopes.includes(`${topic}:editor`);
+    function hasEditorAccess(topic: string, scopes: string[]): boolean {
+        if (!scopes.length) return false;
+        // Only show for users with explicit editor role for that topic
+        return scopes.includes(`${topic}:editor`);
     }
 
     onMount(() => {
@@ -18,10 +17,12 @@
             return;
         }
 
-        const firstTopic = allTopics.find(topic => hasEditorAccess(topic));
+        const scopes = $auth.user?.scopes || [];
+        const firstTopic = allTopics.find(topic => hasEditorAccess(topic, scopes));
         if (firstTopic) {
             goto(`/editor/${firstTopic}`);
         } else {
+            // User has no editor access to any topic
             goto('/');
         }
     });

@@ -8,8 +8,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy project files
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies
-RUN uv sync --frozen --no-cache
+# Install dependencies (--no-frozen allows updating lock file if needed)
+RUN uv sync --no-cache
 
 # Copy application code
 COPY main.py database.py models.py auth.py redis_client.py ./

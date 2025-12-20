@@ -46,3 +46,23 @@ output "app_secrets_arn" {
   value       = aws_secretsmanager_secret.app_secrets.arn
   sensitive   = true
 }
+
+output "s3_resources_bucket" {
+  description = "S3 bucket for resource storage"
+  value       = aws_s3_bucket.resources.id
+}
+
+output "s3_resources_bucket_arn" {
+  description = "S3 bucket ARN for resource storage"
+  value       = aws_s3_bucket.resources.arn
+}
+
+output "chroma_service_discovery" {
+  description = "ChromaDB service discovery endpoint"
+  value       = "chroma.chatbot.local:8000"
+}
+
+output "efs_filesystem_id" {
+  description = "EFS filesystem ID for ChromaDB"
+  value       = aws_efs_file_system.chroma.id
+}

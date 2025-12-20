@@ -82,7 +82,7 @@ MANDATORY_PROMPT_TYPES = [
 ]
 
 
-@router.get("/", response_model=List[PromptModuleResponse])
+@router.get("", response_model=List[PromptModuleResponse])
 async def list_prompt_modules(
     prompt_type: Optional[str] = None,
     prompt_group: Optional[str] = None,

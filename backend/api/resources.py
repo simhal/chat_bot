@@ -1,19 +1,21 @@
 """API endpoints for resource management."""
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
 from pydantic import BaseModel
 from database import get_db
 from models import Resource, ResourceType, ResourceStatus, TimeseriesFrequency, TimeseriesDataType, Group, ContentArticle
 from services.resource_service import ResourceService
+from services.storage_service import get_storage, StorageService
 from dependencies import get_current_user, require_admin, is_global_admin, has_role
 import json
 import os
 import uuid
 from datetime import datetime
 import hashlib
+import io
 
 router = APIRouter(prefix="/api/resources", tags=["resources"])
 
@@ -21,8 +23,12 @@ router = APIRouter(prefix="/api/resources", tags=["resources"])
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/app/uploads")
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
-# Ensure upload directory exists
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# Get storage service instance
+storage = get_storage()
+
+# Ensure upload directory exists (for local storage)
+if storage.is_local:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # =============================================================================
@@ -662,14 +668,9 @@ async def create_file_resource(
     file_ext = os.path.splitext(file.filename)[1] if file.filename else ''
     unique_filename = f"{uuid.uuid4().hex}{file_ext}"
 
-    # Create subdirectory by date
+    # Create subdirectory path by date
     date_dir = datetime.now().strftime("%Y/%m")
-    full_dir = os.path.join(UPLOAD_DIR, date_dir)
-    os.makedirs(full_dir, exist_ok=True)
-
-    # Full file path
-    file_path = os.path.join(date_dir, unique_filename)
-    full_file_path = os.path.join(UPLOAD_DIR, file_path)
+    file_path = f"{date_dir}/{unique_filename}"
 
     # Handle text files specially - store content in TextResource
     if rt == ResourceType.TEXT:
@@ -691,14 +692,12 @@ async def create_file_resource(
                 detail="Text file must be UTF-8 encoded"
             )
     else:
-        # Write file to disk
-        try:
-            with open(full_file_path, 'wb') as f:
-                f.write(content)
-        except Exception as e:
+        # Save file using storage service (works with both local and S3)
+        mime_type = file.content_type or 'application/octet-stream'
+        if not storage.save_file_with_metadata(file_path, content, mime_type):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file: {str(e)}"
+                detail="Failed to save file to storage"
             )
 
         # Create file resource in database
@@ -710,7 +709,7 @@ async def create_file_resource(
                 filename=file.filename or unique_filename,
                 file_path=file_path,
                 file_size=file_size,
-                mime_type=file.content_type or 'application/octet-stream',
+                mime_type=mime_type,
                 created_by=user_id,
                 checksum=checksum,
                 description=description,
@@ -719,8 +718,7 @@ async def create_file_resource(
             )
         except Exception as e:
             # Clean up file on error
-            if os.path.exists(full_file_path):
-                os.remove(full_file_path)
+            storage.delete_file(file_path)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create resource: {str(e)}"
@@ -1210,24 +1208,26 @@ async def get_resource_content(
     Example usage in HTML:
         <img src="/api/resources/content/abc123xyz" />
     """
-    # Get file path info
+    # Get file path info (returns relative path, mime_type, filename)
     file_info = ResourceService.get_resource_file_path(db, hash_id)
 
     if file_info:
         # This is a file-based resource
-        file_path, mime_type, filename = file_info
+        relative_path, mime_type, filename = file_info
 
-        if not os.path.exists(file_path):
+        # Get file content using storage service (works with both local and S3)
+        file_content = storage.get_file(relative_path)
+
+        if file_content is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Resource file not found"
             )
 
-        # Return file with appropriate headers
-        return FileResponse(
-            path=file_path,
+        # Return file as streaming response
+        return StreamingResponse(
+            io.BytesIO(file_content),
             media_type=mime_type,
-            filename=filename,
             headers={
                 "Cache-Control": "public, max-age=31536000",  # Cache for 1 year
                 "Content-Disposition": f"inline; filename=\"{filename}\""

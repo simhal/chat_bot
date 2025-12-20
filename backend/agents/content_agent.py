@@ -1,6 +1,6 @@
 """Base class for content creation agents."""
 
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
@@ -8,9 +8,6 @@ from services.prompt_service import PromptService
 from services.content_service import ContentService
 from services.google_search_service import GoogleSearchService
 import logging
-
-if TYPE_CHECKING:
-    from agents.resource_query_agent import ResourceQueryAgent
 
 logger = logging.getLogger("uvicorn")
 
@@ -26,9 +23,7 @@ class ContentAgent:
         topic: str,
         llm: ChatOpenAI,
         google_search_service: GoogleSearchService,
-        db: Session,
-        resource_query_agents: Optional[List["ResourceQueryAgent"]] = None,
-        use_topic_resources: bool = True
+        db: Session
     ):
         """
         Initialize content agent.
@@ -38,39 +33,23 @@ class ContentAgent:
             llm: ChatOpenAI LLM instance
             google_search_service: Google Search service for research
             db: Database session
-            resource_query_agents: Optional list of ResourceQueryAgents for querying resources
-            use_topic_resources: If True and no agents provided, auto-create agents scoped to topic
         """
         self.topic = topic
         self.llm = llm
         self.google_search = google_search_service
         self.db = db
 
-        # Auto-create resource query agents scoped to topic if not provided
-        if resource_query_agents:
-            self.resource_query_agents = resource_query_agents
-        elif use_topic_resources:
-            from agents.resource_query_agent import TextResourceQueryAgent, TableResourceQueryAgent
-            self.resource_query_agents = [
-                TextResourceQueryAgent(llm, db, topic=topic),
-                TableResourceQueryAgent(llm, db, topic=topic)
-            ]
-            logger.info(f"📚 {topic.upper()} CONTENT AGENT: Created resource query agents for topic")
-        else:
-            self.resource_query_agents = []
-
         # Get system prompt from database or default
         self.system_prompt = PromptService.get_content_agent_template(topic)
 
-    def query(self, user_query: str, article_id: Optional[int] = None) -> str:
+    def query(self, user_query: str) -> str:
         """
         Query the content agent.
         First checks database for existing relevant content.
-        If not found, creates new content using Google Search and resources.
+        If not found, creates new content using Google Search.
 
         Args:
             user_query: User's question/query
-            article_id: Optional article ID to include its attached resources in the search
 
         Returns:
             Response text (existing article or newly created)
@@ -78,12 +57,8 @@ class ContentAgent:
         import time
         start_time = time.time()
 
-        self._current_article_id = article_id  # Store for use in _query_resources
-
         logger.info(f"📚 {self.topic.upper()} CONTENT AGENT: Started")
         logger.info(f"   Query: '{user_query[:80]}{'...' if len(user_query) > 80 else ''}'")
-        if article_id:
-            logger.info(f"   Article context: {article_id}")
 
         # Step 1: Search existing content in database
         logger.info(f"🔍 {self.topic.upper()}: Searching database for existing content...")
@@ -157,70 +132,9 @@ class ContentAgent:
 *This article has been read {article['readership_count']} times.*
 """
 
-    def _query_resources(self, query: str) -> str:
-        """
-        Query resources using ResourceQueryAgents.
-
-        Searches:
-        1. Shared resources for the current topic (e.g., macro:admin group)
-        2. Resources attached to the current article (if article_id is set)
-
-        Args:
-            query: The search query
-
-        Returns:
-            Formatted string with resource context
-        """
-        if not self.resource_query_agents:
-            return ""
-
-        import time
-        logger.info(f"📚 {self.topic.upper()}: Querying resources...")
-        logger.info(f"   Scope: topic='{self.topic}', article_id={getattr(self, '_current_article_id', None)}")
-        start_time = time.time()
-
-        all_resources = []
-        article_id = getattr(self, '_current_article_id', None)
-
-        for agent in self.resource_query_agents:
-            try:
-                # Query with topic and article_id context
-                # The agent may already have topic set, but we also pass article_id
-                result = agent.query(
-                    query,
-                    context=f"Creating content for topic: {self.topic}",
-                    limit=3,
-                    article_id=article_id
-                )
-                if result.get("success") and result.get("resources"):
-                    all_resources.extend(result["resources"])
-                    logger.info(f"   {agent.__class__.__name__}: {len(result['resources'])} results")
-            except Exception as e:
-                logger.error(f"   {agent.__class__.__name__} error: {e}")
-
-        elapsed = time.time() - start_time
-        logger.info(f"   Resource query: {elapsed:.2f}s, {len(all_resources)} total resources")
-
-        if not all_resources:
-            return ""
-
-        # Sort by similarity score and take top results
-        all_resources.sort(key=lambda x: x.get("similarity_score", 0), reverse=True)
-        top_resources = all_resources[:5]
-
-        # Format for LLM context
-        formatted = []
-        for i, r in enumerate(top_resources, 1):
-            formatted.append(f"""{i}. {r.get('name', 'Unnamed Resource')} (Type: {r.get('type', 'unknown')})
-   Relevance: {r.get('similarity_score', 0):.2f}
-   Preview: {r.get('content_preview', 'No preview available')[:200]}...
-""")
-
-        return "\n".join(formatted)
-
     def _create_new_article(self, query: str) -> str:
         """
-        Create new article using Google Search research and resource queries.
+        Create new article using Google Search research.
 
         Args:
             query: User query
@@ -230,16 +144,8 @@ class ContentAgent:
         """
         import time
 
-        # Step 1a: Query internal resources
-        resource_context = ""
-        if self.resource_query_agents:
-            logger.info(f"🔬 {self.topic.upper()}: STEP 1a - Querying internal resources")
-            resource_context = self._query_resources(query)
-            if resource_context:
-                logger.info(f"   Found relevant internal resources")
-
-        # Step 1b: Research using Google Search
-        logger.info(f"🔬 {self.topic.upper()}: STEP 1b - Conducting web research")
+        # Step 1: Research using Google Search
+        logger.info(f"🔬 {self.topic.upper()}: STEP 1 - Conducting research")
         search_start = time.time()
         try:
             search_results = self.google_search.search_by_topic(
@@ -262,21 +168,6 @@ class ContentAgent:
             logger.error(f"   Google Search error after {search_time:.2f}s: {e}")
             search_context = "No search results available."
 
-        # Combine contexts
-        full_context = ""
-        if resource_context:
-            full_context += f"""Internal Knowledge Base Resources:
-{resource_context}
-
-"""
-        if search_context and search_context != "No search results available.":
-            full_context += f"""Recent News and Web Sources:
-{search_context}
-"""
-
-        if not full_context:
-            full_context = "No research context available."
-
         # Step 2: Generate article using LLM
         logger.info(f"✍️  {self.topic.upper()}: STEP 2 - Generating article with LLM")
         llm_start = time.time()
@@ -284,21 +175,19 @@ class ContentAgent:
             SystemMessage(content=self.system_prompt),
             HumanMessage(content=f"""Create an article about: {query}
 
-Research context:
-{full_context}
+Research context from recent news:
+{search_context}
 
 Requirements:
-1. Write a clear, informative article (1000-2000 words)
+1. Write a clear, informative article (max 1000 words)
 2. Include a compelling headline
-3. Use factual information from the research (both internal resources and web sources)
+3. Use factual information from the research
 4. Cite sources where applicable
 5. Make it reusable for other users interested in this topic
-6. Include author name (use your agent name: {self.topic})
 
 Format your response as:
 HEADLINE: [Your headline]
 KEYWORDS: [comma-separated keywords]
-AUTHOR: [Author name]
 CONTENT:
 [Your article content]
 """)
@@ -321,8 +210,7 @@ CONTENT:
             headline=parsed_article['headline'],
             content=parsed_article['content'],
             keywords=parsed_article['keywords'],
-            agent_name=self.topic,
-            author=parsed_article.get('author')
+            agent_name=self.topic
         )
         db_time = time.time() - db_start
 
@@ -374,13 +262,12 @@ CONTENT:
             response_text: LLM response
 
         Returns:
-            Dict with 'headline', 'keywords', 'author', 'content'
+            Dict with 'headline', 'keywords', 'content'
         """
         lines = response_text.strip().split('\n')
 
         headline = "Untitled Article"
         keywords = ""
-        author = self.topic  # Default to agent name
         content_lines = []
         parsing_content = False
 
@@ -389,8 +276,6 @@ CONTENT:
                 headline = line.replace('HEADLINE:', '').strip()
             elif line.startswith('KEYWORDS:'):
                 keywords = line.replace('KEYWORDS:', '').strip()
-            elif line.startswith('AUTHOR:'):
-                author = line.replace('AUTHOR:', '').strip()
             elif line.startswith('CONTENT:'):
                 parsing_content = True
             elif parsing_content:
@@ -402,18 +287,14 @@ CONTENT:
         if not content:
             content = response_text
 
-        # Enforce 1000-2000 words (changed from max 1000)
+        # Truncate content to roughly 1000 words
         words = content.split()
-        if len(words) < 1000:
-            logger.warning(f"Article too short ({len(words)} words), padding not recommended")
-        elif len(words) > 2000:
-            content = ' '.join(words[:2000]) + "..."
-            logger.warning(f"Article truncated from {len(words)} to 2000 words")
+        if len(words) > 1000:
+            content = ' '.join(words[:1000]) + "..."
 
         return {
             'headline': headline[:500],  # Limit headline length
             'keywords': keywords[:500] if keywords else None,
-            'author': author[:255] if author else None,
             'content': content
         }
 
@@ -451,7 +332,7 @@ Query: {query}"""
 
     def get_top_rated_articles(self, limit: int = 10) -> List[Dict]:
         """
-        Get top-rated articles for this topic.
+        Get top-rated articles for this topic.   
 
         Args:
             limit: Maximum number of articles

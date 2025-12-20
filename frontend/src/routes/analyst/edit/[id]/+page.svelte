@@ -2,9 +2,10 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/stores/auth';
-    import { getArticle, editArticle, chatWithContentAgent, approveArticle } from '$lib/api';
+    import { getArticle, editArticle, chatWithContentAgent, approveArticle, getArticleResources, type Resource } from '$lib/api';
     import { onMount } from 'svelte';
     import Markdown from '$lib/components/Markdown.svelte';
+    import ResourceEditor from '$lib/components/ResourceEditor.svelte';
 
     interface Article {
         id: number;
@@ -38,15 +39,18 @@
     let editHeadline = '';
     let editContent = '';
     let editKeywords = '';
-    let editStatus = 'draft';
 
     // Chat interface
     let chatMessages: ChatMessage[] = [];
     let chatInput = '';
     let chatLoading = false;
 
-    // View mode
-    let showPreview = true;
+    // View mode: 'editor' | 'preview' | 'resources'
+    let viewMode: 'editor' | 'preview' | 'resources' = 'preview';
+
+    // Resources
+    let resources: Resource[] = [];
+    let resourcesLoading = false;
 
     $: articleId = parseInt($page.params.id);
 
@@ -54,10 +58,7 @@
     function canEditTopic(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
 
-        // Global admin can edit all topics
-        if ($auth.user.scopes.includes('global:admin')) return true;
-
-        // Check for admin, analyst, or editor role for the topic
+        // Check for admin, analyst, or editor role for the specific topic
         return $auth.user.scopes.includes(`${topic}:admin`) ||
                $auth.user.scopes.includes(`${topic}:analyst`) ||
                $auth.user.scopes.includes(`${topic}:editor`);
@@ -77,7 +78,9 @@
             editHeadline = article.headline;
             editContent = article.content;
             editKeywords = article.keywords || '';
-            editStatus = article.status || 'draft';
+
+            // Load resources
+            await loadResources();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to load article';
         } finally {
@@ -85,15 +88,45 @@
         }
     }
 
-    
+    async function loadResources() {
+        if (!articleId) return;
+        try {
+            resourcesLoading = true;
+            const response = await getArticleResources(articleId);
+            resources = response.resources;
+        } catch (e) {
+            console.error('Failed to load resources:', e);
+        } finally {
+            resourcesLoading = false;
+        }
+    }
 
-    async function handleApprove() {
+    function handleResourceRefresh() {
+        loadResources();
+        // Switch to resources view to show the new resource
+        viewMode = 'resources';
+    }
+
+    function handleResourceError(event: CustomEvent<string>) {
+        error = event.detail;
+    }
+
+    function getStatusColor(status: string): string {
+        switch (status) {
+            case 'published': return '#10b981';
+            case 'editor': return '#f59e0b';
+            case 'draft':
+            default: return '#6b7280';
+        }
+    }
+
+    async function handleSubmit() {
         if (!article) return;
         try {
             await approveArticle(article.id);
             goto(`/analyst/${article.topic}`);
         } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to approve article';
+            error = e instanceof Error ? e.message : 'Failed to submit article';
         }
     }
 
@@ -103,7 +136,7 @@
         try {
             saving = true;
             error = '';
-            await editArticle(article.id, editHeadline, editContent, editKeywords, editStatus);
+            await editArticle(article.id, editHeadline, editContent, editKeywords, article.status);
 
             // Reload article to get updated data
             await loadArticle();
@@ -219,18 +252,43 @@
                 </button>
                 <div class="article-info">
                     <span class="article-id">Article #{article.id}</span>
+                    <span class="article-status-badge" style="background-color: {getStatusColor(article.status)}">
+                        {article.status}
+                    </span>
+                </div>
+            </div>
+            <div class="header-center">
+                <div class="view-mode-buttons">
+                    <button
+                        class="view-btn"
+                        class:active={viewMode === 'editor'}
+                        on:click={() => viewMode = 'editor'}
+                    >
+                        Editor Only
+                    </button>
+                    <button
+                        class="view-btn"
+                        class:active={viewMode === 'preview'}
+                        on:click={() => viewMode = 'preview'}
+                    >
+                        Editor / Preview
+                    </button>
+                    <button
+                        class="view-btn"
+                        class:active={viewMode === 'resources'}
+                        on:click={() => viewMode = 'resources'}
+                    >
+                        Editor / Resources
+                    </button>
                 </div>
             </div>
             <div class="header-right">
-                <button class="toggle-btn" on:click={() => showPreview = !showPreview}>
-                    {showPreview ? 'Editor Only' : 'Show Preview'}
-                </button>
                 <button class="save-btn" on:click={handleSave} disabled={saving}>
                     {saving ? 'Saving...' : 'Save Changes'}
                 </button>
                 {#if article.status === 'draft'}
-                    <button class="approve-btn" on:click={handleApprove}>
-                        Approve
+                    <button class="submit-btn" on:click={handleSubmit}>
+                        Submit
                     </button>
                 {/if}
             </div>
@@ -240,7 +298,7 @@
             <div class="error-banner">{error}</div>
         {/if}
 
-        <div class="editor-main" class:preview-hidden={!showPreview}>
+        <div class="editor-main" class:single-panel={viewMode === 'editor'}>
             <!-- Editor Panel -->
             <div class="editor-panel">
                 <div class="editor-content">
@@ -266,18 +324,6 @@
                         />
                     </div>
 
-                    <div class="form-group">
-                        <label for="status">Status</label>
-                        <select
-                            id="status"
-                            bind:value={editStatus}
-                        >
-                            <option value="draft">Draft</option>
-                            <option value="editor">Editor Review</option>
-                            <option value="published">Published</option>
-                        </select>
-                    </div>
-
                     <div class="form-group flex-grow">
                         <label for="content">
                             Content (Markdown)
@@ -292,8 +338,8 @@
                 </div>
             </div>
 
-            <!-- Preview Panel -->
-            {#if showPreview}
+            <!-- Right Panel (Preview or Resources based on view mode) -->
+            {#if viewMode === 'preview'}
                 <div class="preview-panel">
                     <div class="preview-header">
                         <h3>Preview</h3>
@@ -310,6 +356,23 @@
                         <div class="preview-markdown">
                             <Markdown content={editContent} />
                         </div>
+                    </div>
+                </div>
+            {:else if viewMode === 'resources'}
+                <div class="resources-panel">
+                    <div class="resources-header-bar">
+                        <h3>Resources ({resources.length})</h3>
+                    </div>
+                    <div class="resources-content">
+                        <ResourceEditor
+                            {resources}
+                            {articleId}
+                            loading={resourcesLoading}
+                            showDeleteButton={false}
+                            showUnlinkButton={true}
+                            on:refresh={handleResourceRefresh}
+                            on:error={handleResourceError}
+                        />
                     </div>
                 </div>
             {/if}
@@ -423,6 +486,7 @@
         padding: 1rem 1.5rem;
         background: white;
         border-bottom: 1px solid #e5e7eb;
+        gap: 1rem;
     }
 
     .header-left,
@@ -430,6 +494,42 @@
         display: flex;
         align-items: center;
         gap: 1rem;
+    }
+
+    .header-center {
+        display: flex;
+        align-items: center;
+    }
+
+    .view-mode-buttons {
+        display: flex;
+        background: #f3f4f6;
+        border-radius: 6px;
+        padding: 3px;
+        gap: 2px;
+    }
+
+    .view-btn {
+        padding: 0.5rem 1rem;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #6b7280;
+        transition: all 0.2s;
+        white-space: nowrap;
+    }
+
+    .view-btn:hover {
+        color: #374151;
+    }
+
+    .view-btn.active {
+        background: white;
+        color: #1f2937;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
     }
 
     .back-btn {
@@ -462,21 +562,13 @@
         font-size: 0.875rem;
     }
 
-    .toggle-btn {
-        padding: 0.5rem 1rem;
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 0.875rem;
-        transition: all 0.2s;
-        color: #6b7280;
-        font-weight: 500;
-    }
-
-    .toggle-btn:hover {
-        background: #f9fafb;
-        border-color: #d1d5db;
+    .article-status-badge {
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: white;
+        text-transform: capitalize;
     }
 
     .save-btn {
@@ -491,7 +583,7 @@
         transition: all 0.2s;
     }
 
-    .approve-btn {
+    .submit-btn {
         padding: 0.5rem 1rem;
         background: #10b981;
         color: white;
@@ -502,7 +594,7 @@
         font-weight: 500;
     }
 
-    .approve-btn:hover {
+    .submit-btn:hover {
         background: #059669;
     }
 
@@ -529,15 +621,16 @@
         gap: 0;
         flex: 1;
         overflow: hidden;
-        height: calc(100vh - 200px); /* Header + chat panel */
+        height: calc(100vh - 200px);
     }
 
-    .editor-main.preview-hidden {
+    .editor-main.single-panel {
         grid-template-columns: 1fr;
     }
 
     .editor-panel,
-    .preview-panel {
+    .preview-panel,
+    .resources-panel {
         background: white;
         overflow-y: auto;
     }
@@ -579,7 +672,8 @@
         font-weight: normal;
     }
 
-    .form-group input {
+    .form-group input,
+    .form-group select {
         padding: 0.75rem;
         border: 1px solid #e0e0e0;
         border-radius: 4px;
@@ -599,7 +693,8 @@
     }
 
     .form-group input:focus,
-    .form-group textarea:focus {
+    .form-group textarea:focus,
+    .form-group select:focus {
         outline: none;
         border-color: #0077b5;
         box-shadow: 0 0 0 2px rgba(0, 119, 181, 0.1);
@@ -653,6 +748,30 @@
     .preview-markdown {
         line-height: 1.8;
         color: #333;
+    }
+
+    /* Resources Panel */
+    .resources-panel {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .resources-header-bar {
+        padding: 1rem 1.5rem;
+        border-bottom: 1px solid #e0e0e0;
+        background: #fafafa;
+    }
+
+    .resources-header-bar h3 {
+        margin: 0;
+        color: #333;
+        font-size: 1rem;
+    }
+
+    .resources-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem;
     }
 
     /* Chat Panel */
