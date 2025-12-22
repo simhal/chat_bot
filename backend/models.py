@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Table, ForeignKey, UniqueConstraint, Text, Enum, Float, Index
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Table, ForeignKey, UniqueConstraint, Text, Enum, Float, Index, JSON
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -25,11 +25,13 @@ class ResourceType(str, enum.Enum):
     IMAGE = "image"
     PDF = "pdf"
     TEXT = "text"
+    HTML = "html"  # Standalone HTML files (e.g., sortable tables)
     EXCEL = "excel"
     ZIP = "zip"
     CSV = "csv"
     TABLE = "table"
     TIMESERIES = "timeseries"
+    ARTICLE = "article"  # Parent container for published article resources
 
 
 class TimeseriesFrequency(str, enum.Enum):
@@ -76,6 +78,63 @@ user_groups = Table(
     Column('group_id', Integer, ForeignKey('groups.id', ondelete='CASCADE'), primary_key=True),
     Column('assigned_at', DateTime(timezone=True), server_default=func.now(), nullable=False)
 )
+
+
+class Topic(Base):
+    """
+    Dynamic topic configuration for research domains.
+
+    Topics define research categories (e.g., Macro, Equity, Fixed Income, ESG).
+    Each topic automatically creates 4 groups: admin, analyst, editor, reader.
+    """
+    __tablename__ = 'topics'
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # URL-safe identifier (e.g., 'fixed_income', 'macro')
+    slug = Column(String(50), unique=True, nullable=False, index=True)
+
+    # Display title (e.g., 'Fixed Income Research', 'Macroeconomic Analysis')
+    title = Column(String(200), nullable=False)
+
+    # Description for the topic
+    description = Column(Text, nullable=True)
+
+    # Visibility settings
+    visible = Column(Boolean, default=True, nullable=False, index=True)  # Show in navigation
+    searchable = Column(Boolean, default=True, nullable=False)  # Include in search
+    active = Column(Boolean, default=True, nullable=False, index=True)  # Main on/off switch
+
+    # Aggregate statistics (updated periodically or on-demand)
+    reader_count = Column(Integer, default=0, nullable=False)  # Total reads across articles
+    rating_average = Column(Float, nullable=True)  # Average rating across articles
+    article_count = Column(Integer, default=0, nullable=False)  # Number of articles
+
+    # Agent configuration for multi-agent routing
+    agent_type = Column(String(50), nullable=True)  # e.g., 'equity', 'economist', 'fixed_income', or custom
+    agent_config = Column(JSON, nullable=True)  # Custom agent configuration (tools, prompts, etc.)
+
+    # Main chat integration - if True, main chat agent can query this topic's content agent
+    access_mainchat = Column(Boolean, default=True, nullable=False)
+
+    # UI customization
+    icon = Column(String(50), nullable=True)  # Icon name or emoji
+    color = Column(String(20), nullable=True)  # Hex color code
+    sort_order = Column(Integer, default=0, nullable=False, index=True)  # Display order
+
+    # Article ordering: 'date' (newest first), 'priority' (highest first), 'title' (alphabetical)
+    article_order = Column(String(20), default='date', nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationships
+    groups = relationship('Group', back_populates='topic', cascade='all, delete-orphan')
+    articles = relationship('ContentArticle', back_populates='topic_ref')
+
+    def __repr__(self):
+        return f"<Topic(id={self.id}, slug='{self.slug}', title='{self.title}')>"
 
 
 class User(Base):
@@ -128,8 +187,12 @@ class Group(Base):
     description = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    # Relationship to users
+    # Foreign key to Topic (nullable for global groups)
+    topic_id = Column(Integer, ForeignKey('topics.id', ondelete='CASCADE'), nullable=True, index=True)
+
+    # Relationships
     users = relationship('User', secondary=user_groups, back_populates='groups')
+    topic = relationship('Topic', back_populates='groups')
 
     def __repr__(self):
         return f"<Group(id={self.id}, name='{self.name}', groupname='{self.groupname}', role='{self.role}')>"
@@ -283,8 +346,11 @@ class ContentArticle(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    # Topic type: macro, equity, fixed_income, esg
-    topic = Column(String(50), nullable=False, index=True)
+    # Topic - foreign key to topics table
+    topic_id = Column(Integer, ForeignKey('topics.id', ondelete='SET NULL'), nullable=True, index=True)
+
+    # Legacy topic string (kept for backwards compatibility, will be deprecated)
+    topic = Column(String(50), nullable=True, index=True)
 
     # Article headline/title
     headline = Column(String(500), nullable=False, index=True)
@@ -317,6 +383,12 @@ class ContentArticle(Base):
     # Keywords for searchability (comma-separated)
     keywords = Column(Text, nullable=True)
 
+    # Priority for manual ordering (higher = more important)
+    priority = Column(Integer, default=0, nullable=False, index=True)
+
+    # Sticky flag - sticky articles always appear first, sorted by priority
+    is_sticky = Column(Boolean, default=False, nullable=False, index=True)
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -327,8 +399,18 @@ class ContentArticle(Base):
     # Active status (can be deactivated by admin)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
 
+    # Relationship to Topic
+    topic_ref = relationship('Topic', back_populates='articles')
+
+    @property
+    def topic_slug(self) -> str:
+        """Get topic slug from relationship or legacy field."""
+        if self.topic_ref:
+            return self.topic_ref.slug
+        return self.topic or ""
+
     def __repr__(self):
-        return f"<ContentArticle(id={self.id}, topic='{self.topic}', headline='{self.headline[:50]}...')>"
+        return f"<ContentArticle(id={self.id}, topic='{self.topic_slug}', headline='{self.headline[:50]}...')>"
 
 
 class ContentRating(Base):
@@ -573,6 +655,44 @@ class TableResource(Base):
 
     # Relationship
     resource = relationship('Resource', back_populates='table_resource')
+
+    @property
+    def columns(self) -> list:
+        """Get column names as a list."""
+        import json
+        if self.column_names:
+            try:
+                return json.loads(self.column_names)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    @columns.setter
+    def columns(self, value: list):
+        """Set column names from a list."""
+        import json
+        self.column_names = json.dumps(value) if value else "[]"
+
+    @property
+    def data(self) -> list:
+        """Get table data rows as a list."""
+        import json
+        if self.table_data:
+            try:
+                parsed = json.loads(self.table_data)
+                if isinstance(parsed, dict):
+                    return parsed.get("data", [])
+                return parsed
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return []
+
+    @data.setter
+    def data(self, value: list):
+        """Set table data rows from a list."""
+        import json
+        # Store as {"data": [...]} format for compatibility
+        self.table_data = json.dumps({"data": value}) if value else '{"data": []}'
 
     def __repr__(self):
         return f"<TableResource(id={self.id}, rows={self.row_count}, cols={self.column_count})>"

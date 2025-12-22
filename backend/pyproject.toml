@@ -29,4 +29,6 @@ dependencies = [
     "ddgs>=9.9.3",
     "reportlab>=4.0.0",
     "markdown2>=2.4.0",
+    "matplotlib>=3.8.0",
+    "pillow>=10.0.0",
 ]

@@ -6,8 +6,54 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from auth import verify_access_token
 from typing import List
+from sqlalchemy.orm import Session
+from database import get_db
 
 security = HTTPBearer()
+
+
+def get_valid_topics(db: Session, active_only: bool = True) -> List[str]:
+    """
+    Get list of valid topic slugs from the database.
+
+    Args:
+        db: Database session
+        active_only: If True, only return active topics
+
+    Returns:
+        List of topic slugs
+    """
+    from models import Topic
+
+    query = db.query(Topic.slug)
+    if active_only:
+        query = query.filter(Topic.active == True)
+
+    return [row[0] for row in query.all()]
+
+
+def get_valid_topics_sync(active_only: bool = True) -> List[str]:
+    """
+    Get list of valid topic slugs from the database (synchronous version).
+    Creates its own database session.
+
+    Args:
+        active_only: If True, only return active topics
+
+    Returns:
+        List of topic slugs
+    """
+    from database import SessionLocal
+    from models import Topic
+
+    db = SessionLocal()
+    try:
+        query = db.query(Topic.slug)
+        if active_only:
+            query = query.filter(Topic.active == True)
+        return [row[0] for row in query.all()]
+    finally:
+        db.close()
 
 
 def has_role(scopes: List[str], groupname: str, role: str) -> bool:
@@ -99,14 +145,11 @@ def require_analyst(topic: str):
     Global admins also have access.
 
     Args:
-        topic: Topic name (macro, equity, fixed_income, esg)
+        topic: Topic name (any valid topic slug from database)
 
     Returns:
         Dependency function that checks for appropriate permissions
     """
-    # Valid topic names
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
-
     def check_analyst_permission(user: dict = Depends(get_current_user)) -> dict:
         """
         Check if user has analyst/editor/admin permission for the topic.
@@ -126,7 +169,8 @@ def require_analyst(topic: str):
         if is_global_admin(scopes):
             return user
 
-        # Validate topic
+        # Validate topic against database
+        valid_topics = get_valid_topics_sync()
         if topic not in valid_topics:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -151,13 +195,11 @@ def require_editor(topic: str):
     Global admins also have access.
 
     Args:
-        topic: Topic name (macro, equity, fixed_income, esg)
+        topic: Topic name (any valid topic slug from database)
 
     Returns:
         Dependency function that checks for editor permissions
     """
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
-
     def check_editor_permission(user: dict = Depends(get_current_user)) -> dict:
         """
         Check if user has editor/admin permission for the topic.
@@ -168,7 +210,8 @@ def require_editor(topic: str):
         if is_global_admin(scopes):
             return user
 
-        # Validate topic
+        # Validate topic against database
+        valid_topics = get_valid_topics_sync()
         if topic not in valid_topics:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -193,13 +236,11 @@ def require_topic_admin(topic: str):
     Global admins also have access.
 
     Args:
-        topic: Topic name (macro, equity, fixed_income, esg)
+        topic: Topic name (any valid topic slug from database)
 
     Returns:
         Dependency function that checks for topic admin permissions
     """
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
-
     def check_topic_admin_permission(user: dict = Depends(get_current_user)) -> dict:
         """
         Check if user has admin permission for the topic.
@@ -210,7 +251,8 @@ def require_topic_admin(topic: str):
         if is_global_admin(scopes):
             return user
 
-        # Validate topic
+        # Validate topic against database
+        valid_topics = get_valid_topics_sync()
         if topic not in valid_topics:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

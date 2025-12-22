@@ -767,8 +767,10 @@ class ResourceService:
             rt = ResourceType(rt)
 
         # Only file-based resources can be served
+        # ARTICLE resources now store popup HTML as a file in S3
+        # HTML resources are standalone HTML files (e.g., sortable tables from published tables)
         if rt not in [ResourceType.IMAGE, ResourceType.PDF, ResourceType.EXCEL,
-                      ResourceType.ZIP, ResourceType.CSV]:
+                      ResourceType.ZIP, ResourceType.CSV, ResourceType.ARTICLE, ResourceType.HTML]:
             return None
 
         if not resource.file_resource:
@@ -789,10 +791,16 @@ class ResourceService:
         created_by: Optional[int] = None,
         search: Optional[str] = None,
         offset: int = 0,
-        limit: int = 50
+        limit: int = 50,
+        global_only: bool = False,
+        exclude_article_linked: bool = False
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         List resources with filtering.
+
+        Args:
+            global_only: If True, only return resources with group_id = NULL (global resources)
+            exclude_article_linked: If True, exclude resources that are linked to any article
 
         Returns tuple of (list of resource dicts, total count).
         """
@@ -800,10 +808,19 @@ class ResourceService:
 
         if resource_type:
             query = query.filter(Resource.resource_type == resource_type)
-        if group_id:
+        if global_only:
+            query = query.filter(Resource.group_id == None)
+        elif group_id:
             query = query.filter(Resource.group_id == group_id)
         if created_by:
             query = query.filter(Resource.created_by == created_by)
+        if exclude_article_linked:
+            # Exclude resources that are linked to any article
+            from sqlalchemy import exists, select
+            linked_subquery = select(article_resources.c.resource_id).where(
+                article_resources.c.resource_id == Resource.id
+            ).exists()
+            query = query.filter(~linked_subquery)
         if search:
             search_pattern = f"%{search}%"
             query = query.filter(
@@ -870,6 +887,196 @@ class ResourceService:
         db.refresh(resource)
 
         return resource
+
+    @staticmethod
+    def update_text_content(
+        db: Session,
+        resource_id: int,
+        content: str,
+        user_id: int,
+        encoding: str = "utf-8"
+    ) -> Optional[Resource]:
+        """Update text resource content."""
+        resource = db.query(Resource).filter(
+            Resource.id == resource_id,
+            Resource.is_active == True,
+            Resource.resource_type == ResourceType.TEXT
+        ).first()
+
+        if not resource or not resource.text_resource:
+            return None
+
+        # Update text content
+        resource.text_resource.content = content
+        resource.text_resource.encoding = encoding
+        resource.text_resource.word_count = len(content.split())
+        resource.text_resource.char_count = len(content)
+        resource.modified_by = user_id
+
+        # Update ChromaDB embedding
+        ResourceService._update_chromadb(
+            resource_id=resource_id,
+            resource_type="text",
+            content=content,
+            metadata={
+                "resource_id": resource_id,
+                "name": resource.name,
+                "type": "text"
+            }
+        )
+
+        db.commit()
+        db.refresh(resource)
+
+        logger.info(f"Text resource {resource_id} content updated")
+        return resource
+
+    @staticmethod
+    def update_table_content(
+        db: Session,
+        resource_id: int,
+        table_data: dict,
+        user_id: int,
+        column_types: Optional[dict] = None
+    ) -> Optional[Resource]:
+        """Update table resource content."""
+        resource = db.query(Resource).filter(
+            Resource.id == resource_id,
+            Resource.is_active == True,
+            Resource.resource_type == ResourceType.TABLE
+        ).first()
+
+        if not resource or not resource.table_resource:
+            return None
+
+        columns = table_data.get("columns", [])
+        data = table_data.get("data", [])
+
+        # Update table content
+        resource.table_resource.columns = columns
+        resource.table_resource.data = data
+        resource.table_resource.row_count = len(data)
+        resource.table_resource.column_count = len(columns)
+        if column_types:
+            resource.table_resource.column_types = column_types
+        resource.modified_by = user_id
+
+        # Create text representation for ChromaDB
+        text_content = f"Table: {resource.name}\nColumns: {', '.join(columns)}\n"
+        for row in data[:10]:  # First 10 rows for embedding
+            text_content += " | ".join(str(cell) for cell in row) + "\n"
+
+        ResourceService._update_chromadb(
+            resource_id=resource_id,
+            resource_type="table",
+            content=text_content,
+            metadata={
+                "resource_id": resource_id,
+                "name": resource.name,
+                "type": "table",
+                "row_count": len(data),
+                "column_count": len(columns)
+            }
+        )
+
+        db.commit()
+        db.refresh(resource)
+
+        logger.info(f"Table resource {resource_id} content updated ({len(data)} rows)")
+        return resource
+
+    @staticmethod
+    def update_timeseries_data(
+        db: Session,
+        resource_id: int,
+        data: List[dict],
+        user_id: int
+    ) -> Optional[Resource]:
+        """Update timeseries data."""
+        from models import TimeseriesData
+
+        resource = db.query(Resource).filter(
+            Resource.id == resource_id,
+            Resource.is_active == True,
+            Resource.resource_type == ResourceType.TIMESERIES
+        ).first()
+
+        if not resource or not resource.timeseries_metadata:
+            return None
+
+        metadata = resource.timeseries_metadata
+
+        # Clear existing data
+        db.query(TimeseriesData).filter(
+            TimeseriesData.metadata_id == metadata.id
+        ).delete()
+
+        # Insert new data
+        for row in data:
+            ts_data = TimeseriesData(
+                metadata_id=metadata.id,
+                timestamp=row.get("timestamp"),
+                values=row.get("values", {})
+            )
+            db.add(ts_data)
+
+        # Update metadata stats
+        metadata.data_points = len(data)
+        if data:
+            timestamps = [row.get("timestamp") for row in data if row.get("timestamp")]
+            if timestamps:
+                metadata.start_date = min(timestamps)
+                metadata.end_date = max(timestamps)
+
+        resource.modified_by = user_id
+        db.commit()
+        db.refresh(resource)
+
+        logger.info(f"Timeseries resource {resource_id} data updated ({len(data)} points)")
+        return resource
+
+    @staticmethod
+    def _update_chromadb(
+        resource_id: int,
+        resource_type: str,
+        content: str,
+        metadata: Dict[str, Any]
+    ) -> bool:
+        """Update resource content in ChromaDB."""
+        collection = _get_resource_collection()
+        if collection is None:
+            return False
+
+        try:
+            doc_id = ResourceService._make_resource_doc_id(resource_id, resource_type)
+
+            # Generate new embedding
+            embedding = VectorService._generate_embedding(content)
+            if not embedding:
+                return False
+
+            # Clean metadata
+            clean_metadata = {}
+            for k, v in metadata.items():
+                if v is None:
+                    clean_metadata[k] = ""
+                elif isinstance(v, (str, int, float, bool)):
+                    clean_metadata[k] = v
+                else:
+                    clean_metadata[k] = str(v)
+
+            # Update in ChromaDB
+            collection.upsert(
+                ids=[doc_id],
+                embeddings=[embedding],
+                documents=[content[:10000]],
+                metadatas=[clean_metadata]
+            )
+
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update ChromaDB for resource {resource_id}: {e}")
+            return False
 
     @staticmethod
     def delete_resource(db: Session, resource_id: int, user_id: int) -> bool:

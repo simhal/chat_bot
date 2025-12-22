@@ -1,12 +1,10 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getEditorArticles, rejectArticle, publishArticle, downloadArticlePDF } from '$lib/api';
+    import { getEditorArticles, rejectArticle, publishArticle, downloadArticlePDF, getTopics, type Topic as TopicType } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
-
-    type Topic = 'macro' | 'equity' | 'fixed_income' | 'esg';
 
     interface Article {
         id: number;
@@ -24,24 +22,15 @@
         is_active: boolean;
     }
 
-    let currentTopic: Topic;
+    let currentTopic: string = '';
     let articles: Article[] = [];
     let loading = true;
     let error = '';
     let selectedArticle: Article | null = null;
-    const allTopics = [
-        { id: 'macro' as Topic, label: 'Macroeconomic' },
-        { id: 'equity' as Topic, label: 'Equity' },
-        { id: 'fixed_income' as Topic, label: 'Fixed Income' },
-        { id: 'esg' as Topic, label: 'ESG' }
-    ];
+    let topicsLoading = true;
 
-    const topicLabels: Record<Topic, string> = {
-        'macro': 'Macroeconomic Research',
-        'equity': 'Equity Research',
-        'fixed_income': 'Fixed Income Research',
-        'esg': 'ESG Research'
-    };
+    // Topics loaded from database
+    let dbTopics: TopicType[] = [];
 
     // Get user scopes reactively
     $: userScopes = $auth.user?.scopes || [];
@@ -49,24 +38,42 @@
     // Check if user has editor access to a specific topic
     function hasEditorAccess(topic: string, scopes: string[]): boolean {
         if (!scopes.length) return false;
-        // Only show for users with explicit editor role for that topic
+        // Global admin can access all topics
+        if (scopes.includes('global:admin')) return true;
+        // Or users with explicit editor role for that topic
         return scopes.includes(`${topic}:editor`);
     }
 
     // Filter topics to only show ones where user has editor access
-    // Using userScopes in the reactive statement ensures proper reactivity
-    $: topics = allTopics.filter(t => hasEditorAccess(t.id, userScopes));
+    $: accessibleTopics = dbTopics
+        .filter(topic => hasEditorAccess(topic.slug, userScopes))
+        .sort((a, b) => a.sort_order - b.sort_order);
 
     // Get topic from URL parameter
-    $: currentTopic = $page.params.topic as Topic;
+    $: currentTopic = $page.params.topic;
 
-    function switchTopic(topic: Topic) {
-        goto(`/editor/${topic}`);
+    // Current topic data
+    $: currentTopicData = dbTopics.find(t => t.slug === currentTopic);
+
+    function switchTopic(topicSlug: string) {
+        goto(`/editor/${topicSlug}`);
     }
 
     // Redirect if user doesn't have permission for current topic
-    $: if ($auth.isAuthenticated && currentTopic && !hasEditorAccess(currentTopic, userScopes)) {
+    $: if ($auth.isAuthenticated && currentTopic && !topicsLoading && !hasEditorAccess(currentTopic, userScopes)) {
         goto('/editor');
+    }
+
+    async function loadTopicsFromDb() {
+        try {
+            topicsLoading = true;
+            dbTopics = await getTopics(); // Show all topics in role dropdown
+        } catch (e) {
+            console.error('Error loading topics:', e);
+            dbTopics = [];
+        } finally {
+            topicsLoading = false;
+        }
     }
 
     async function loadArticles() {
@@ -122,32 +129,45 @@
     }
 
     // Load articles when topic changes
-    $: if (currentTopic) {
+    $: if (currentTopic && !topicsLoading) {
         loadArticles();
     }
 
-    onMount(() => {
+    onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
+            return;
         }
+        await loadTopicsFromDb();
     });
 </script>
 
 <div class="content-container">
-    <!-- Topic Tabs with Generate Button -->
-    <div class="tabs-container">
-        <nav class="topic-tabs">
-            {#each topics as topic}
-                <button
-                    class="tab"
-                    class:active={currentTopic === topic.id}
-                    on:click={() => switchTopic(topic.id)}
+    <!-- Page Header -->
+    <div class="page-header">
+        <div class="header-left">
+            <div class="topic-selector">
+                <label for="topic-select">Topic:</label>
+                <select
+                    id="topic-select"
+                    value={currentTopic}
+                    on:change={(e) => switchTopic(e.currentTarget.value)}
+                    disabled={topicsLoading}
                 >
-                    {topic.label}
-                </button>
-            {/each}
-        </nav>
-        <span class="page-title">Editor Review</span>
+                    {#if topicsLoading}
+                        <option value="">Loading topics...</option>
+                    {:else}
+                        {#each accessibleTopics as topic}
+                            <option value={topic.slug}>{topic.title}</option>
+                        {/each}
+                    {/if}
+                </select>
+            </div>
+            <button class="action-btn active">Review</button>
+        </div>
+        <div class="header-actions">
+            <!-- Editor has no additional actions -->
+        </div>
     </div>
 
     {#if error}
@@ -159,7 +179,7 @@
     {:else if articles.length === 0}
         <div class="empty-state">
             <h2>No Articles Yet</h2>
-            <p>There are no {topicLabels[currentTopic]} articles waiting for editor review.</p>
+            <p>There are no {currentTopicData?.title || currentTopic} articles waiting for editor review.</p>
         </div>
     {:else}
         <div class="articles-grid">
@@ -295,7 +315,7 @@
     }
 
     .content-container {
-        max-width: 1200px;
+        max-width: 1600px;
         margin: 0 auto;
         background: white;
         min-height: 100vh;
@@ -318,40 +338,101 @@
         align-items: center;
     }
 
-    /* Topic Tabs Container */
-    .tabs-container {
+    /* Page Header */
+    .page-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        padding: 1rem 1.5rem;
         background: white;
         border-bottom: 1px solid #e5e7eb;
         margin-bottom: 2rem;
     }
 
-    .topic-tabs {
+    .header-left {
         display: flex;
+        align-items: center;
+        gap: 1rem;
     }
 
-    .tab {
-        padding: 1rem 1.5rem;
-        background: none;
-        border: none;
-        border-bottom: 2px solid transparent;
-        cursor: pointer;
+    .header-actions {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .topic-selector {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .topic-selector label {
+        font-weight: 500;
+        color: #374151;
+        font-size: 0.875rem;
+    }
+
+    .topic-selector select {
+        padding: 0.5rem 2rem 0.5rem 0.75rem;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
         font-size: 0.875rem;
         font-weight: 500;
-        color: #6b7280;
-        transition: all 0.2s;
+        color: #1f2937;
+        background: white;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.5rem center;
+        background-size: 1rem;
+        min-width: 180px;
     }
 
-    .tab:hover {
-        color: #1a1a1a;
-        background: #f9fafb;
+    .topic-selector select:hover {
+        border-color: #3b82f6;
     }
 
-    .tab.active {
-        color: #3b82f6;
-        border-bottom-color: #3b82f6;
+    .topic-selector select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+
+    /* Action Buttons */
+    .action-btn {
+        padding: 0.5rem 1rem;
+        background: #f3f4f6;
+        color: #374151;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        text-decoration: none;
+    }
+
+    .action-btn:hover {
+        background: #e5e7eb;
+        border-color: #d1d5db;
+    }
+
+    .action-btn.active {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
+    }
+
+    .action-btn.primary {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
+    }
+
+    .action-btn.primary:hover {
+        background: #2563eb;
+        border-color: #2563eb;
     }
 
     header h1 {
@@ -398,7 +479,6 @@
         transition: all 0.2s;
     }
 
-    .page-title { padding: 0 1.5rem; font-weight: 600; color: #ff9800; font-size: 0.875rem; }
 
     .generate-btn:hover {
         background: #2563eb;

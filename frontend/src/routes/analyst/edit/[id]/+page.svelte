@@ -2,7 +2,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/stores/auth';
-    import { getArticle, editArticle, chatWithContentAgent, approveArticle, getArticleResources, type Resource } from '$lib/api';
+    import { getArticle, editArticle, chatWithContentAgent, approveArticle, getArticleResources, getGlobalResources, getGroupResources, getResource, type Resource } from '$lib/api';
     import { onMount } from 'svelte';
     import Markdown from '$lib/components/Markdown.svelte';
     import ResourceEditor from '$lib/components/ResourceEditor.svelte';
@@ -49,7 +49,9 @@
     let viewMode: 'editor' | 'preview' | 'resources' = 'preview';
 
     // Resources
-    let resources: Resource[] = [];
+    let resources: Resource[] = [];  // All resources linked to article
+    let allTopicResources: Resource[] = [];  // All topic resources (for categorization)
+    let allGlobalResources: Resource[] = [];  // All global resources (for categorization)
     let resourcesLoading = false;
 
     $: articleId = parseInt($page.params.id);
@@ -89,11 +91,21 @@
     }
 
     async function loadResources() {
-        if (!articleId) return;
+        if (!articleId || !article) return;
         try {
             resourcesLoading = true;
-            const response = await getArticleResources(articleId);
-            resources = response.resources;
+
+            // Load article resources, topic resources, and global resources in parallel
+            const [articleResponse, topicResponse, globalResponse] = await Promise.all([
+                getArticleResources(articleId),
+                getGroupResources(article.topic),
+                getGlobalResources()
+            ]);
+
+            resources = articleResponse.resources;
+            // Keep full lists for ResourceEditor to categorize linked resources
+            allTopicResources = topicResponse.resources;
+            allGlobalResources = globalResponse.resources;
         } catch (e) {
             console.error('Failed to load resources:', e);
         } finally {
@@ -227,6 +239,42 @@
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    // Handle drop of resources onto the content textarea
+    async function handleContentDrop(e: DragEvent) {
+        e.preventDefault();
+        const text = e.dataTransfer?.getData('text/plain');
+        if (!text) return;
+
+        const textarea = e.target as HTMLTextAreaElement;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+
+        // Check if it's a markdown image link (![name](url)) or a resource link ([name](resource:hash_id))
+        // Resource links are used for tables, articles, PDFs, etc. and will be embedded appropriately
+        // during HTML rendering (inline) or PDF generation (as images)
+        const isMarkdownImage = text.startsWith('![') && text.includes('](');
+        const isResourceLink = text.startsWith('[') && text.includes('](resource:');
+
+        if (isMarkdownImage || isResourceLink) {
+            // Insert the markdown at cursor position
+            editContent = editContent.substring(0, start) + '\n' + text + '\n' + editContent.substring(end);
+
+            // Move cursor after the inserted text
+            setTimeout(() => {
+                textarea.selectionStart = textarea.selectionEnd = start + text.length + 2;
+                textarea.focus();
+            }, 0);
+        }
+    }
+
+    // Allow drop on the textarea
+    function handleContentDragOver(e: DragEvent) {
+        e.preventDefault();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'copy';
+        }
+    }
+
     onMount(() => {
         loadArticle();
     });
@@ -333,6 +381,8 @@
                             id="content"
                             bind:value={editContent}
                             placeholder="Article content in Markdown format..."
+                            on:drop={handleContentDrop}
+                            on:dragover={handleContentDragOver}
                         ></textarea>
                     </div>
                 </div>
@@ -361,11 +411,13 @@
             {:else if viewMode === 'resources'}
                 <div class="resources-panel">
                     <div class="resources-header-bar">
-                        <h3>Resources ({resources.length})</h3>
+                        <h3>Resources</h3>
                     </div>
                     <div class="resources-content">
                         <ResourceEditor
                             {resources}
+                            topicResources={allTopicResources}
+                            globalResources={allGlobalResources}
                             {articleId}
                             loading={resourcesLoading}
                             showDeleteButton={false}

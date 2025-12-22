@@ -2,10 +2,11 @@
 
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func, or_
-from models import ContentArticle, ContentRating
+from sqlalchemy import desc, asc, func, or_, case
+from models import ContentArticle, ContentRating, User, Topic
 from services.content_cache import ContentCache
 from services.vector_service import VectorService
+from services.article_resource_service import ArticleResourceService
 import logging
 
 logger = logging.getLogger("uvicorn")
@@ -38,6 +39,8 @@ class ContentService:
             "readership_count": article.readership_count,
             "rating": article.rating,
             "rating_count": article.rating_count,
+            "priority": article.priority if article.priority is not None else 0,
+            "is_sticky": article.is_sticky if article.is_sticky is not None else False,
             "created_at": article.created_at.isoformat(),
             "updated_at": article.updated_at.isoformat(),
             "created_by_agent": article.created_by_agent,
@@ -133,9 +136,38 @@ class ContentService:
         return article_dict
 
     @staticmethod
+    def _get_article_ordering(db: Session, topic_slug: str):
+        """
+        Get the ordering clauses for articles based on topic's article_order setting.
+        Sticky articles always come first, sorted by priority descending.
+        Non-sticky articles are sorted according to the topic's article_order.
+
+        Returns:
+            List of order_by clauses
+        """
+        # Get topic's article_order setting
+        topic = db.query(Topic).filter(Topic.slug == topic_slug).first()
+        article_order = topic.article_order if topic else 'date'
+
+        # Sticky articles first (is_sticky DESC so True comes before False)
+        # Then sort by the topic's article_order setting
+        order_clauses = [desc(ContentArticle.is_sticky), desc(ContentArticle.priority)]
+
+        if article_order == 'priority':
+            # Already have priority in order_clauses, add date as secondary
+            order_clauses.append(desc(ContentArticle.created_at))
+        elif article_order == 'title':
+            order_clauses.append(asc(ContentArticle.headline))
+        else:  # 'date' is default
+            order_clauses.append(desc(ContentArticle.created_at))
+
+        return order_clauses
+
+    @staticmethod
     def get_recent_articles(db: Session, topic: str, limit: int = 10) -> List[Dict]:
         """
         Get recent articles for a topic with caching.
+        Respects the topic's article_order setting.
 
         Args:
             db: Database session
@@ -150,11 +182,14 @@ class ContentService:
         if cached:
             return cached
 
+        # Get ordering based on topic settings
+        order_clauses = ContentService._get_article_ordering(db, topic)
+
         # Cache miss - query database
         articles = db.query(ContentArticle).filter(
             ContentArticle.topic == topic,
             ContentArticle.is_active == True
-        ).order_by(desc(ContentArticle.created_at)).limit(limit).all()
+        ).order_by(*order_clauses).limit(limit).all()
 
         # Convert to dicts and cache
         article_dicts = [ContentService._article_to_dict(a) for a in articles]
@@ -568,7 +603,9 @@ class ContentService:
         keywords: Optional[str] = None,
         author: Optional[str] = None,
         editor: Optional[str] = None,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        priority: Optional[int] = None,
+        is_sticky: Optional[bool] = None
     ) -> Dict:
         """
         Update an article. Metadata in PostgreSQL, content in ChromaDB.
@@ -582,6 +619,8 @@ class ContentService:
             author: New author (optional) - updates PostgreSQL
             editor: New editor (optional) - updates PostgreSQL
             status: New status (optional) - updates PostgreSQL
+            priority: New priority (optional) - updates PostgreSQL
+            is_sticky: New sticky flag (optional) - updates PostgreSQL
 
         Returns:
             Updated article dict
@@ -600,7 +639,7 @@ class ContentService:
             raise ValueError("Article not found")
 
         # Check that at least one field is provided
-        if all(v is None for v in [headline, content, keywords, author, editor, status]):
+        if all(v is None for v in [headline, content, keywords, author, editor, status, priority, is_sticky]):
             raise ValueError("At least one field must be provided for update")
 
         # Update metadata fields in PostgreSQL
@@ -619,6 +658,12 @@ class ContentService:
             metadata_updated = True
         if status is not None:
             article.status = ArticleStatus(status)
+            metadata_updated = True
+        if priority is not None:
+            article.priority = priority
+            metadata_updated = True
+        if is_sticky is not None:
+            article.is_sticky = is_sticky
             metadata_updated = True
 
         if metadata_updated:
@@ -729,6 +774,7 @@ class ContentService:
     def get_published_articles(db: Session, topic: str, limit: int = 10) -> List[Dict]:
         """
         Get only published articles for a topic (for public display).
+        Respects the topic's article_order setting.
 
         Args:
             db: Database session
@@ -739,12 +785,15 @@ class ContentService:
             List of published article dicts
         """
         from models import ArticleStatus
-        
+
+        # Get ordering based on topic settings
+        order_clauses = ContentService._get_article_ordering(db, topic)
+
         articles = db.query(ContentArticle).filter(
             ContentArticle.topic == topic,
             ContentArticle.is_active == True,
             ContentArticle.status == ArticleStatus.PUBLISHED
-        ).order_by(desc(ContentArticle.created_at)).limit(limit).all()
+        ).order_by(*order_clauses).limit(limit).all()
 
         return [ContentService._article_to_dict(a) for a in articles]
 
@@ -752,6 +801,7 @@ class ContentService:
     def recall_article(db: Session, article_id: int) -> Dict:
         """
         Recall a published article (move back to draft status).
+        Deletes all publication resources (HTML and PDF versions).
 
         Args:
             db: Database session
@@ -776,6 +826,11 @@ class ContentService:
         if article.status != ArticleStatus.PUBLISHED:
             raise ValueError("Only published articles can be recalled")
 
+        # Delete publication resources first
+        deleted_count = ArticleResourceService.delete_article_resources(db, article_id)
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} publication resources for recalled article {article_id}")
+
         article.status = ArticleStatus.DRAFT
         db.commit()
         db.refresh(article)
@@ -790,7 +845,8 @@ class ContentService:
     def purge_article(db: Session, article_id: int) -> None:
         """
         Permanently delete an article and all related data.
-        This removes the article from PostgreSQL, ChromaDB, and all ratings.
+        This removes the article from PostgreSQL, ChromaDB, all ratings,
+        and all publication resources (HTML and PDF versions).
 
         Args:
             db: Database session
@@ -808,7 +864,12 @@ class ContentService:
 
         topic = article.topic
 
-        # Delete ratings first (foreign key constraint)
+        # Delete publication resources first
+        deleted_count = ArticleResourceService.delete_article_resources(db, article_id)
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} publication resources for purged article {article_id}")
+
+        # Delete ratings (foreign key constraint)
         db.query(ContentRating).filter(ContentRating.article_id == article_id).delete()
 
         # Delete from PostgreSQL
@@ -889,6 +950,9 @@ class ContentService:
         """
         Publish an article (move from editor to published status).
         Sets the editor field to the publisher's email.
+
+        Note: Article resources (HTML, PDF) are now created/updated on save,
+        not on publish. This ensures resources exist before publishing.
 
         Args:
             db: Database session

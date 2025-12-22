@@ -1,17 +1,14 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getAdminUsers, getAdminGroups, assignGroupToUser, removeGroupFromUser, createGroup, createUser, banUser, unbanUser, deleteUser, getUserInfo, getAdminArticles, deleteArticle, reactivateArticle, recallArticle, purgeArticle, getPromptModules, getTonalities, updatePromptModule, createTonality, deleteTonality, setDefaultTonality, adminGetUserTonality, adminUpdateUserTonality, getGroupResources, getGlobalResources, deleteResource, createTextResource, type PromptModule, type TonalityOption, type TonalityPreferences, type Resource, type ResourceListResponse } from '$lib/api';
+    import { getAdminUsers, getAdminGroups, assignGroupToUser, removeGroupFromUser, createGroup, createUser, banUser, unbanUser, deleteUser, getUserInfo, getAdminArticles, deleteArticle, reactivateArticle, recallArticle, purgeArticle, getPromptModules, getTonalities, updatePromptModule, createTonality, deleteTonality, setDefaultTonality, adminGetUserTonality, adminUpdateUserTonality, getGroupResources, getGlobalResources, deleteResource, createTextResource, getTopics, createTopic, updateTopic, deleteTopic, recalculateAllTopicStats, reorderTopics, reorderArticles, editArticle, type PromptModule, type TonalityOption, type TonalityPreferences, type Resource, type ResourceListResponse, type Topic, type TopicCreate, type TopicUpdate } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import ResourceEditor from '$lib/components/ResourceEditor.svelte';
 
-    // Topic definitions
-    const allTopics = [
-        { id: 'macro', label: 'Macro' },
-        { id: 'equity', label: 'Equity' },
-        { id: 'fixed_income', label: 'Fixed Income' },
-        { id: 'esg', label: 'ESG' }
-    ];
+    // Topics loaded from database
+    let allTopics: Array<{ id: string; label: string }> = [];
+    let dbTopics: Topic[] = [];
+    let topicsLoading = true;
 
     let users: any[] = [];
     let groups: any[] = [];
@@ -91,19 +88,49 @@
     // Mandatory prompt types that cannot be deleted
     const mandatoryPromptTypes = ['general', 'chat_specific', 'chat_constraint', 'article_constraint'];
 
-    // View state: 'topics' for topic tabs, 'users' for users view, 'groups' for groups view, 'prompts' for prompts, 'resources' for global resources
+    // View state: 'topics' for topic tabs, 'users' for users view, 'groups' for groups view, 'prompts' for prompts, 'resources' for global resources, 'topics_admin' for topic management
     // Default to 'users' if global admin with no topic scopes, otherwise 'topics'
-    let currentView: 'topics' | 'users' | 'groups' | 'prompts' | 'resources' = 'topics';
+    let currentView: 'topics' | 'users' | 'groups' | 'prompts' | 'resources' | 'topics_admin' = 'topics';
     let selectedTopic: string = '';
     let initialViewSet = false;
+
+    // Topic management state
+    let showCreateTopicModal = false;
+    let newTopicSlug = '';
+    let newTopicTitle = '';
+    let newTopicDescription = '';
+    let newTopicIcon = '';
+    let newTopicColor = '#3b82f6';
+    let createTopicLoading = false;
+    let editingTopic: Topic | null = null;
+    let editedTopicTitle = '';
+    let editedTopicDescription = '';
+    let editedTopicIcon = '';
+    let editedTopicColor = '';
+    let editedTopicVisible = true;
+    let editedTopicActive = true;
+    let editedTopicSearchable = true;
+    let editedTopicAccessMainchat = true;
+    let editedTopicArticleOrder = 'date';  // 'date', 'priority', 'title'
+    let topicSaving = false;
+
+    // Topic drag and drop state
+    let draggedTopic: Topic | null = null;
+    let dragOverIndex: number | null = null;
+
+    // Article drag and drop state
+    let draggedArticle: any = null;
+    let dragOverArticleIndex: number | null = null;
 
     // Check permissions
     $: isGlobalAdmin = $auth.user?.scopes?.includes('global:admin') || false;
 
-    // Topic tabs are visible based on {topic}:admin scope only
-    // Global admins manage users/groups/prompts/resources, topic admins manage their topics
+    // Topic tabs are visible based on {topic}:admin scope or global:admin
+    // Global admins can see all topics, topic admins only see their topics
     $: adminTopics = allTopics.filter(topic => {
         if (!$auth.user?.scopes) return false;
+        // Global admin can access all topics
+        if ($auth.user.scopes.includes('global:admin')) return true;
         return $auth.user.scopes.includes(`${topic.id}:admin`);
     });
 
@@ -114,8 +141,8 @@
         goto('/');
     }
 
-    // Set default view and topic when permissions are loaded
-    $: if (!initialViewSet && $auth.isAuthenticated) {
+    // Set default view and topic when permissions and topics are loaded
+    $: if (!initialViewSet && $auth.isAuthenticated && !topicsLoading) {
         if (adminTopics.length > 0) {
             currentView = 'topics';
             selectedTopic = adminTopics[0].id;
@@ -125,10 +152,38 @@
         initialViewSet = true;
     }
 
+    async function loadTopicsFromDb(recalculate: boolean = false) {
+        try {
+            topicsLoading = true;
+            // Recalculate stats if requested (when opening Topics admin)
+            if (recalculate && isGlobalAdmin) {
+                try {
+                    await recalculateAllTopicStats();
+                } catch (e) {
+                    console.error('Failed to recalculate topic stats:', e);
+                }
+            }
+            dbTopics = await getTopics();
+            // Map database topics to the format used by the UI
+            allTopics = dbTopics.map(t => ({ id: t.slug, label: t.title }));
+        } catch (e) {
+            console.error('Error loading topics:', e);
+            // Fallback to empty array if topics can't be loaded
+            allTopics = [];
+            dbTopics = [];
+        } finally {
+            topicsLoading = false;
+        }
+    }
+
     async function loadData() {
         try {
             loading = true;
             error = '';
+
+            // Load topics first
+            await loadTopicsFromDb();
+
             if (isGlobalAdmin) {
                 const [usersData, groupsData] = await Promise.all([
                     getAdminUsers(),
@@ -151,9 +206,19 @@
             error = '';
             // getAdminArticles returns all articles for the topic
             const allArticles = await getAdminArticles(topic, 0, 100);
-            articles = allArticles.sort((a: any, b: any) =>
-                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            );
+            // Sort by: sticky first, then by priority (descending), then by date
+            articles = allArticles.sort((a: any, b: any) => {
+                // Sticky articles first
+                if (a.is_sticky !== b.is_sticky) {
+                    return a.is_sticky ? -1 : 1;
+                }
+                // Then by priority (higher priority first)
+                if ((b.priority || 0) !== (a.priority || 0)) {
+                    return (b.priority || 0) - (a.priority || 0);
+                }
+                // Then by date (newer first)
+                return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+            });
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to load articles';
             console.error('Error loading articles:', e);
@@ -692,25 +757,326 @@
         }
     }
 
+    // Topic CRUD functions
+    async function handleCreateTopic() {
+        if (!newTopicSlug.trim() || !newTopicTitle.trim()) return;
+
+        // Validate slug format
+        if (!/^[a-z][a-z0-9_]*$/.test(newTopicSlug)) {
+            error = 'Slug must start with a letter and contain only lowercase letters, numbers, and underscores';
+            return;
+        }
+
+        try {
+            createTopicLoading = true;
+            error = '';
+            await createTopic({
+                slug: newTopicSlug.trim(),
+                title: newTopicTitle.trim(),
+                description: newTopicDescription.trim() || undefined,
+                icon: newTopicIcon.trim() || undefined,
+                color: newTopicColor || undefined
+            });
+            await loadTopicsFromDb();
+            await loadData(); // Reload groups as well
+            showCreateTopicModal = false;
+            newTopicSlug = '';
+            newTopicTitle = '';
+            newTopicDescription = '';
+            newTopicIcon = '';
+            newTopicColor = '#3b82f6';
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to create topic';
+        } finally {
+            createTopicLoading = false;
+        }
+    }
+
+    function startEditingTopic(topic: Topic) {
+        editingTopic = topic;
+        editedTopicTitle = topic.title;
+        editedTopicDescription = topic.description || '';
+        editedTopicIcon = topic.icon || '';
+        editedTopicColor = topic.color || '#3b82f6';
+        editedTopicVisible = topic.visible;
+        editedTopicActive = topic.active;
+        editedTopicSearchable = topic.searchable ?? true;
+        editedTopicAccessMainchat = topic.access_mainchat ?? true;
+        editedTopicArticleOrder = topic.article_order || 'date';
+    }
+
+    function cancelEditingTopic() {
+        editingTopic = null;
+    }
+
+    async function saveTopicChanges() {
+        if (!editingTopic) return;
+        try {
+            topicSaving = true;
+            error = '';
+            await updateTopic(editingTopic.slug, {
+                title: editedTopicTitle,
+                description: editedTopicDescription || undefined,
+                icon: editedTopicIcon || undefined,
+                color: editedTopicColor || undefined,
+                visible: editedTopicVisible,
+                active: editedTopicActive,
+                searchable: editedTopicSearchable,
+                access_mainchat: editedTopicAccessMainchat,
+                article_order: editedTopicArticleOrder
+            });
+            await loadTopicsFromDb();
+            cancelEditingTopic();
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to save topic';
+        } finally {
+            topicSaving = false;
+        }
+    }
+
+    async function handleDeleteTopic(topic: Topic) {
+        if (topic.article_count > 0) {
+            if (!confirm(`Topic "${topic.title}" has ${topic.article_count} articles. Articles will keep their content but lose their topic association. Are you sure you want to delete this topic?`)) return;
+            if (!confirm('This action cannot be undone. The 4 groups for this topic will also be deleted. Continue?')) return;
+            try {
+                error = '';
+                await deleteTopic(topic.slug, true);
+                await loadTopicsFromDb();
+                await loadData();
+            } catch (e) {
+                error = e instanceof Error ? e.message : 'Failed to delete topic';
+            }
+        } else {
+            if (!confirm(`Are you sure you want to delete topic "${topic.title}"? The 4 groups for this topic will also be deleted.`)) return;
+            try {
+                error = '';
+                await deleteTopic(topic.slug);
+                await loadTopicsFromDb();
+                await loadData();
+            } catch (e) {
+                error = e instanceof Error ? e.message : 'Failed to delete topic';
+            }
+        }
+    }
+
+    // Topic drag and drop handlers
+    function handleTopicDragStart(e: DragEvent, topic: Topic) {
+        draggedTopic = topic;
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', topic.slug);
+        }
+    }
+
+    function handleTopicDragOver(e: DragEvent, index: number) {
+        e.preventDefault();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'move';
+        }
+        dragOverIndex = index;
+    }
+
+    function handleTopicDragLeave() {
+        dragOverIndex = null;
+    }
+
+    async function handleTopicDrop(e: DragEvent, targetIndex: number) {
+        e.preventDefault();
+        dragOverIndex = null;
+
+        if (!draggedTopic) return;
+
+        const draggedIndex = dbTopics.findIndex(t => t.slug === draggedTopic!.slug);
+        if (draggedIndex === targetIndex) {
+            draggedTopic = null;
+            return;
+        }
+
+        // Reorder the array locally
+        const newTopics = [...dbTopics];
+        const [removed] = newTopics.splice(draggedIndex, 1);
+        newTopics.splice(targetIndex, 0, removed);
+
+        // Update sort_order for all topics based on new positions
+        const reorderData = newTopics.map((t, idx) => ({
+            slug: t.slug,
+            sort_order: idx
+        }));
+
+        try {
+            await reorderTopics(reorderData);
+            // Update local state
+            dbTopics = newTopics.map((t, idx) => ({ ...t, sort_order: idx }));
+            allTopics = dbTopics.map(t => ({ id: t.slug, label: t.title }));
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to reorder topics';
+        }
+
+        draggedTopic = null;
+    }
+
+    function handleTopicDragEnd() {
+        draggedTopic = null;
+        dragOverIndex = null;
+    }
+
+    // Article drag and drop handlers
+    function handleArticleDragStart(e: DragEvent, article: any) {
+        draggedArticle = article;
+        if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', article.id.toString());
+        }
+    }
+
+    function handleArticleDragOver(e: DragEvent, index: number) {
+        e.preventDefault();
+        if (e.dataTransfer) {
+            e.dataTransfer.dropEffect = 'move';
+        }
+        dragOverArticleIndex = index;
+    }
+
+    function handleArticleDragLeave() {
+        dragOverArticleIndex = null;
+    }
+
+    async function handleArticleDrop(e: DragEvent, targetIndex: number) {
+        e.preventDefault();
+        dragOverArticleIndex = null;
+
+        if (!draggedArticle) return;
+
+        const draggedIndex = articles.findIndex(a => a.id === draggedArticle.id);
+        if (draggedIndex === targetIndex) {
+            draggedArticle = null;
+            return;
+        }
+
+        // Separate sticky and non-sticky articles
+        const stickyArticles = articles.filter(a => a.is_sticky);
+        const nonStickyArticles = articles.filter(a => !a.is_sticky);
+
+        // Determine which group we're reordering
+        const isDraggedSticky = draggedArticle.is_sticky;
+        const targetArticle = articles[targetIndex];
+        const isTargetSticky = targetArticle?.is_sticky;
+
+        // Only allow reordering within the same sticky group
+        if (isDraggedSticky !== isTargetSticky) {
+            draggedArticle = null;
+            return; // Don't allow cross-group drag
+        }
+
+        // Reorder within the appropriate group
+        const groupToReorder = isDraggedSticky ? [...stickyArticles] : [...nonStickyArticles];
+        const draggedGroupIndex = groupToReorder.findIndex(a => a.id === draggedArticle.id);
+        const targetGroupIndex = isDraggedSticky
+            ? stickyArticles.findIndex(a => a.id === targetArticle.id)
+            : nonStickyArticles.findIndex(a => a.id === targetArticle.id);
+
+        if (draggedGroupIndex === targetGroupIndex) {
+            draggedArticle = null;
+            return;
+        }
+
+        // Perform the reorder within the group
+        const [removed] = groupToReorder.splice(draggedGroupIndex, 1);
+        groupToReorder.splice(targetGroupIndex, 0, removed);
+
+        // Update priority for articles in this group based on new positions (higher priority = first)
+        const baseOffset = isDraggedSticky ? nonStickyArticles.length : 0; // Sticky gets higher base priority
+        const reorderData = groupToReorder.map((a, idx) => ({
+            id: a.id,
+            priority: groupToReorder.length - idx + baseOffset  // Highest priority for first position
+        }));
+
+        try {
+            await reorderArticles(reorderData);
+            // Update local state - merge the reordered group back
+            const updatedGroup = groupToReorder.map((a, idx) => ({
+                ...a,
+                priority: groupToReorder.length - idx + baseOffset
+            }));
+
+            // Combine sticky and non-sticky, maintaining order
+            if (isDraggedSticky) {
+                articles = [...updatedGroup, ...nonStickyArticles];
+            } else {
+                articles = [...stickyArticles, ...updatedGroup];
+            }
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to reorder articles';
+        }
+
+        draggedArticle = null;
+    }
+
+    function handleArticleDragEnd() {
+        draggedArticle = null;
+        dragOverArticleIndex = null;
+    }
+
+    async function toggleArticleSticky(article: any) {
+        try {
+            await editArticle(article.id, undefined, undefined, undefined, undefined, undefined, !article.is_sticky);
+            // Update local state and re-sort
+            article.is_sticky = !article.is_sticky;
+            articles = [...articles].sort((a: any, b: any) => {
+                // Sticky articles first
+                if (a.is_sticky !== b.is_sticky) {
+                    return a.is_sticky ? -1 : 1;
+                }
+                // Then by priority (higher priority first)
+                if ((b.priority || 0) !== (a.priority || 0)) {
+                    return (b.priority || 0) - (a.priority || 0);
+                }
+                // Then by date (newer first)
+                return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+            });
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to update sticky status';
+        }
+    }
+
     onMount(() => {
         loadData();
     });
 </script>
 
-<div class="admin-container" class:topic-view={currentView === 'topics'}>
-    <!-- Header with topic tabs and action buttons -->
+<div class="admin-container">
+    <!-- Header with topic dropdown and action buttons -->
     <div class="admin-header">
-        <nav class="topic-tabs">
-            {#each adminTopics as topic}
+        <div class="header-left">
+            {#if adminTopics.length > 0}
+                <div class="topic-selector">
+                    <label for="admin-topic-select">Topic:</label>
+                    <select
+                        id="admin-topic-select"
+                        value={selectedTopic}
+                        on:change={(e) => { selectedTopic = e.currentTarget.value; currentView = 'topics'; }}
+                    >
+                        {#each adminTopics as topic}
+                            <option value={topic.id}>{topic.label}</option>
+                        {/each}
+                    </select>
+                </div>
                 <button
-                    class="topic-tab"
-                    class:active={currentView === 'topics' && selectedTopic === topic.id}
-                    on:click={() => { currentView = 'topics'; selectedTopic = topic.id; }}
+                    class="action-btn"
+                    class:active={currentView === 'topics' && topicSubView === 'articles'}
+                    on:click={() => { currentView = 'topics'; topicSubView = 'articles'; }}
                 >
-                    {topic.label}
+                    Articles
                 </button>
-            {/each}
-        </nav>
+                <button
+                    class="action-btn"
+                    class:active={currentView === 'topics' && topicSubView === 'resources'}
+                    on:click={() => { currentView = 'topics'; topicSubView = 'resources'; }}
+                >
+                    Resources
+                </button>
+            {/if}
+        </div>
         {#if isGlobalAdmin}
             <div class="admin-actions">
                 <button
@@ -741,6 +1107,13 @@
                 >
                     Resources
                 </button>
+                <button
+                    class="action-btn"
+                    class:active={currentView === 'topics_admin'}
+                    on:click={() => { currentView = 'topics_admin'; loadTopicsFromDb(true); }}
+                >
+                    Topics
+                </button>
             </div>
         {/if}
     </div>
@@ -752,36 +1125,9 @@
     {#if loading}
         <div class="loading">Loading...</div>
     {:else}
-        <!-- Topic View with Sub-tabs -->
+        <!-- Topic View -->
         {#if currentView === 'topics' && selectedTopic}
             <section class="section">
-                <div class="topic-section-header">
-                    <div class="topic-sub-tabs">
-                        <button
-                            class="sub-tab"
-                            class:active={topicSubView === 'articles'}
-                            on:click={() => topicSubView = 'articles'}
-                        >
-                            Articles
-                        </button>
-                        <button
-                            class="sub-tab"
-                            class:active={topicSubView === 'resources'}
-                            on:click={() => topicSubView = 'resources'}
-                        >
-                            Resources
-                        </button>
-                    </div>
-                    {#if topicSubView === 'articles'}
-                        <button
-                            class="topic-prompt-btn"
-                            on:click={openTopicPromptModal}
-                        >
-                            Edit Topic Prompt
-                        </button>
-                    {/if}
-                </div>
-
                 <!-- Articles Sub-View -->
                 {#if topicSubView === 'articles'}
                     {#if articlesLoading}
@@ -789,10 +1135,13 @@
                     {:else if articles.length === 0}
                         <p class="no-articles">No articles found for this topic.</p>
                     {:else}
+                        <p class="articles-hint">Drag rows to reorder articles by priority. Sticky articles always appear first.</p>
                         <div class="articles-table">
                             <table>
                                 <thead>
                                     <tr>
+                                        <th class="col-priority">#</th>
+                                        <th class="col-sticky">Pin</th>
                                         <th>Title</th>
                                         <th>Status</th>
                                         <th>Author</th>
@@ -805,8 +1154,33 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {#each articles as article}
-                                        <tr class:inactive={!article.is_active}>
+                                    {#each articles as article, index}
+                                        <tr
+                                            class:inactive={!article.is_active}
+                                            class:sticky-article={article.is_sticky}
+                                            class:dragging-article={draggedArticle?.id === article.id}
+                                            class:drag-over-article={dragOverArticleIndex === index}
+                                            draggable="true"
+                                            on:dragstart={(e) => handleArticleDragStart(e, article)}
+                                            on:dragover={(e) => handleArticleDragOver(e, index)}
+                                            on:dragleave={handleArticleDragLeave}
+                                            on:drop={(e) => handleArticleDrop(e, index)}
+                                            on:dragend={handleArticleDragEnd}
+                                        >
+                                            <td class="col-priority">
+                                                <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
+                                                <span class="priority-number">{article.priority || 0}</span>
+                                            </td>
+                                            <td class="col-sticky">
+                                                <button
+                                                    class="sticky-btn"
+                                                    class:is-sticky={article.is_sticky}
+                                                    on:click={() => toggleArticleSticky(article)}
+                                                    title={article.is_sticky ? 'Unpin article' : 'Pin article to top'}
+                                                >
+                                                    {article.is_sticky ? '📌' : '📍'}
+                                                </button>
+                                            </td>
                                             <td class="article-title">{article.headline}</td>
                                             <td>
                                                 <span class="status-badge {getStatusClass(article.status)}">
@@ -1157,8 +1531,6 @@
                 <div class="resources-editor-container">
                     <ResourceEditor
                         {resources}
-                        groupId={globalGroupId}
-                        groupName="global"
                         loading={resourcesLoading}
                         showDeleteButton={true}
                         showUnlinkButton={false}
@@ -1166,6 +1538,96 @@
                         on:error={handleResourceError}
                     />
                 </div>
+            </section>
+        {/if}
+
+        <!-- Topics Admin View -->
+        {#if currentView === 'topics_admin'}
+            <section class="section topics-admin-section">
+                <div class="section-header">
+                    <h2>Topic Management</h2>
+                    <button class="create-topic-btn" on:click={() => showCreateTopicModal = true}>
+                        + Create Topic
+                    </button>
+                </div>
+
+                {#if topicsLoading}
+                    <div class="loading">Loading topics...</div>
+                {:else if dbTopics.length === 0}
+                    <p class="no-topics">No topics found. Create your first topic to get started.</p>
+                {:else}
+                    <p class="topics-hint">Drag rows to reorder topics. The order affects navigation display.</p>
+                    <table class="topics-table">
+                        <thead>
+                            <tr>
+                                <th class="col-order">#</th>
+                                <th class="col-title">Topic</th>
+                                <th class="col-articles">Articles</th>
+                                <th class="col-readers">Readers</th>
+                                <th class="col-rating">Rating</th>
+                                <th class="col-ai">AI</th>
+                                <th class="col-status">Status</th>
+                                <th class="col-actions">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {#each dbTopics as topic, index}
+                                <tr
+                                    class:inactive={!topic.active}
+                                    class:dragging={draggedTopic?.slug === topic.slug}
+                                    class:drag-over={dragOverIndex === index}
+                                    draggable="true"
+                                    on:dragstart={(e) => handleTopicDragStart(e, topic)}
+                                    on:dragover={(e) => handleTopicDragOver(e, index)}
+                                    on:dragleave={handleTopicDragLeave}
+                                    on:drop={(e) => handleTopicDrop(e, index)}
+                                    on:dragend={handleTopicDragEnd}
+                                >
+                                    <td class="col-order">
+                                        <span class="drag-handle" title="Drag to reorder">&#x2630;</span>
+                                        <span class="order-number">{index + 1}</span>
+                                    </td>
+                                    <td class="col-title">
+                                        <div class="topic-title-cell">
+                                            <strong>{topic.title}</strong>
+                                            <code class="topic-slug">{topic.slug}</code>
+                                            {#if topic.description}
+                                                <span class="topic-desc">{topic.description}</span>
+                                            {/if}
+                                        </div>
+                                    </td>
+                                    <td class="col-articles">{topic.article_count}</td>
+                                    <td class="col-readers">{topic.reader_count || 0}</td>
+                                    <td class="col-rating">{topic.rating_average ? topic.rating_average.toFixed(1) : '-'}</td>
+                                    <td class="col-ai">
+                                        {#if topic.access_mainchat}
+                                            <span class="ai-badge enabled" title="Main chat can query this topic">On</span>
+                                        {:else}
+                                            <span class="ai-badge disabled" title="Main chat cannot query this topic">Off</span>
+                                        {/if}
+                                    </td>
+                                    <td class="col-status">
+                                        <div class="status-badges">
+                                            {#if topic.active && topic.visible}
+                                                <span class="status-badge active">Active</span>
+                                            {:else if !topic.active}
+                                                <span class="status-badge inactive">Inactive</span>
+                                            {:else if !topic.visible}
+                                                <span class="status-badge hidden">Hidden</span>
+                                            {/if}
+                                        </div>
+                                    </td>
+                                    <td class="col-actions">
+                                        <div class="action-buttons">
+                                            <button class="btn-edit" on:click={() => startEditingTopic(topic)}>Edit</button>
+                                            <button class="btn-delete" on:click={() => handleDeleteTopic(topic)}>Delete</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                {/if}
             </section>
         {/if}
     {/if}
@@ -1509,20 +1971,185 @@
     </div>
 {/if}
 
+<!-- Create Topic Modal -->
+{#if showCreateTopicModal}
+    <div class="modal-overlay" on:click={() => showCreateTopicModal = false}>
+        <div class="modal topic-modal" on:click|stopPropagation>
+            <h3>Create New Topic</h3>
+            <p class="modal-hint">Create a new research topic. 4 permission groups will be automatically created.</p>
+
+            <div class="topic-form">
+                <div class="form-group">
+                    <label for="topic-slug">Slug *</label>
+                    <input
+                        id="topic-slug"
+                        type="text"
+                        bind:value={newTopicSlug}
+                        placeholder="e.g., crypto, commodities"
+                        pattern="[a-z][a-z0-9_]*"
+                    />
+                    <span class="help-text">Lowercase letters, numbers, underscores. Cannot be changed later.</span>
+                </div>
+
+                <div class="form-group">
+                    <label for="topic-title">Title *</label>
+                    <input
+                        id="topic-title"
+                        type="text"
+                        bind:value={newTopicTitle}
+                        placeholder="e.g., Cryptocurrency Research"
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label for="topic-description">Description</label>
+                    <textarea
+                        id="topic-description"
+                        bind:value={newTopicDescription}
+                        placeholder="Brief description of this research topic..."
+                        rows="3"
+                    ></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="topic-icon">Icon</label>
+                        <input
+                            id="topic-icon"
+                            type="text"
+                            bind:value={newTopicIcon}
+                            placeholder="e.g., chart, globe"
+                        />
+                    </div>
+                    <div class="form-group">
+                        <label for="topic-color">Color</label>
+                        <input
+                            id="topic-color"
+                            type="color"
+                            bind:value={newTopicColor}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button
+                    on:click={handleCreateTopic}
+                    disabled={!newTopicSlug.trim() || !newTopicTitle.trim() || createTopicLoading}
+                >
+                    {createTopicLoading ? 'Creating...' : 'Create Topic'}
+                </button>
+                <button on:click={() => showCreateTopicModal = false}>Cancel</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
+<!-- Edit Topic Modal -->
+{#if editingTopic !== null}
+    <div class="modal-overlay" on:click={cancelEditingTopic}>
+        <div class="modal topic-modal" on:click|stopPropagation>
+            <h3>Edit Topic: {editingTopic.slug}</h3>
+            <p class="modal-hint">Update topic settings. Slug cannot be changed.</p>
+
+            <div class="topic-form">
+                <div class="form-group">
+                    <label for="edit-topic-title">Title *</label>
+                    <input
+                        id="edit-topic-title"
+                        type="text"
+                        bind:value={editedTopicTitle}
+                        placeholder="Topic title"
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label for="edit-topic-description">Description</label>
+                    <textarea
+                        id="edit-topic-description"
+                        bind:value={editedTopicDescription}
+                        placeholder="Brief description..."
+                        rows="3"
+                    ></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-topic-icon">Icon</label>
+                        <input
+                            id="edit-topic-icon"
+                            type="text"
+                            bind:value={editedTopicIcon}
+                            placeholder="Icon name"
+                        />
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-topic-color">Color</label>
+                        <input
+                            id="edit-topic-color"
+                            type="color"
+                            bind:value={editedTopicColor}
+                        />
+                    </div>
+                </div>
+
+                <div class="form-group checkboxes">
+                    <label class="checkbox-label">
+                        <input type="checkbox" bind:checked={editedTopicActive} />
+                        <span>Active</span>
+                        <span class="help-text">When inactive, topic is hidden from navigation</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" bind:checked={editedTopicVisible} />
+                        <span>Visible</span>
+                        <span class="help-text">When hidden, topic doesn't appear in public lists</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" bind:checked={editedTopicSearchable} />
+                        <span>Searchable</span>
+                        <span class="help-text">Allow content to appear in search results</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" bind:checked={editedTopicAccessMainchat} />
+                        <span>AI Access</span>
+                        <span class="help-text">Main chat can query this topic's content agent</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="edit-article-order">Article Ordering</label>
+                <select id="edit-article-order" bind:value={editedTopicArticleOrder}>
+                    <option value="date">By Date (newest first)</option>
+                    <option value="priority">By Priority (highest first)</option>
+                    <option value="title">By Title (alphabetical)</option>
+                </select>
+                <span class="help-text">How articles are sorted in listings. Sticky articles always appear first.</span>
+            </div>
+
+            <div class="modal-actions">
+                <button
+                    on:click={saveTopicChanges}
+                    disabled={!editedTopicTitle.trim() || topicSaving}
+                >
+                    {topicSaving ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button on:click={cancelEditingTopic}>Cancel</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <style>
     :global(body) {
         background: #fafafa;
     }
 
     .admin-container {
-        max-width: 1200px;
+        max-width: 1600px;
         margin: 0 auto;
         background: white;
         min-height: 100vh;
-    }
-
-    .admin-container.topic-view {
-        max-width: 1800px;
     }
 
     .admin-header {
@@ -1531,34 +2158,53 @@
         align-items: center;
         border-bottom: 1px solid #e5e7eb;
         background: white;
-        padding: 0 1rem;
+        padding: 0.75rem 1rem;
+        gap: 1rem;
     }
 
-    .topic-tabs {
+    .header-left {
         display: flex;
-        gap: 0;
+        align-items: center;
+        gap: 0.75rem;
     }
 
-    .topic-tab {
-        padding: 1rem 1.5rem;
-        background: none;
-        border: none;
-        border-bottom: 2px solid transparent;
-        cursor: pointer;
+    .topic-selector {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .topic-selector label {
+        font-weight: 500;
+        color: #374151;
+        font-size: 0.875rem;
+    }
+
+    .topic-selector select {
+        padding: 0.5rem 2rem 0.5rem 0.75rem;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
         font-size: 0.875rem;
         font-weight: 500;
-        color: #6b7280;
-        transition: all 0.2s;
+        color: #1f2937;
+        background: white;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.5rem center;
+        background-size: 1rem;
+        min-width: 150px;
     }
 
-    .topic-tab:hover {
-        color: #1a1a1a;
-        background: #f9fafb;
+    .topic-selector select:hover {
+        border-color: #3b82f6;
     }
 
-    .topic-tab.active {
-        color: #3b82f6;
-        border-bottom-color: #3b82f6;
+    .topic-selector select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
     }
 
     .admin-actions {
@@ -1652,6 +2298,72 @@
     tbody tr.inactive {
         opacity: 0.5;
         background: #f5f5f5;
+    }
+
+    /* Article drag-and-drop styles */
+    tbody tr.dragging-article {
+        opacity: 0.5;
+        background: #e0e7ff;
+    }
+
+    tbody tr.drag-over-article {
+        border-top: 3px solid #3b82f6;
+    }
+
+    tbody tr.sticky-article {
+        background: #fef9c3;
+    }
+
+    tbody tr.sticky-article:hover {
+        background: #fef08a;
+    }
+
+    tbody tr[draggable="true"] {
+        cursor: grab;
+    }
+
+    tbody tr[draggable="true"]:active {
+        cursor: grabbing;
+    }
+
+    .articles-hint {
+        color: #6b7280;
+        font-size: 0.85rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .col-priority {
+        width: 60px;
+        text-align: center;
+    }
+
+    .col-sticky {
+        width: 50px;
+        text-align: center;
+    }
+
+    .priority-number {
+        color: #6b7280;
+        font-size: 0.85rem;
+        font-weight: 500;
+    }
+
+    .sticky-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        font-size: 1rem;
+        padding: 0.25rem;
+        border-radius: 4px;
+        transition: background 0.2s;
+    }
+
+    .sticky-btn:hover {
+        background: #f3f4f6;
+    }
+
+    .sticky-btn.is-sticky {
+        background: #fef08a;
     }
 
     .article-title {
@@ -2698,5 +3410,344 @@
     .type-timeseries {
         background: #cffafe;
         color: #0e7490;
+    }
+
+    /* Topics Admin Styles */
+    .topics-admin-section {
+        max-width: 1200px;
+    }
+
+    .create-topic-btn {
+        padding: 0.5rem 1rem;
+        background: #10b981;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: background 0.2s;
+    }
+
+    .create-topic-btn:hover {
+        background: #059669;
+    }
+
+    .no-topics {
+        color: #6b7280;
+        text-align: center;
+        padding: 3rem;
+        background: #f9fafb;
+        border-radius: 8px;
+    }
+
+    .topics-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+    }
+
+    .topics-table th {
+        text-align: left;
+        padding: 0.75rem 1rem;
+        background: #f9fafb;
+        border-bottom: 2px solid #e5e7eb;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: #6b7280;
+    }
+
+    .topics-table td {
+        padding: 1rem;
+        border-bottom: 1px solid #e5e7eb;
+        vertical-align: middle;
+    }
+
+    .topics-table tr:hover {
+        background: #f9fafb;
+    }
+
+    .topics-table tr.inactive {
+        opacity: 0.6;
+        background: #fafafa;
+    }
+
+    .topics-table tr.dragging {
+        opacity: 0.5;
+        background: #e0e7ff;
+    }
+
+    .topics-table tr.drag-over {
+        border-top: 3px solid #3b82f6;
+    }
+
+    .topics-table tr[draggable="true"] {
+        cursor: grab;
+    }
+
+    .topics-table tr[draggable="true"]:active {
+        cursor: grabbing;
+    }
+
+    .topics-hint {
+        color: #6b7280;
+        font-size: 0.85rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .col-order {
+        width: 50px;
+        text-align: center;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    .drag-handle {
+        cursor: grab;
+        color: #9ca3af;
+        margin-right: 0.5rem;
+        font-size: 1rem;
+    }
+
+    .drag-handle:hover {
+        color: #3b82f6;
+    }
+
+    .order-number {
+        color: #6b7280;
+        font-size: 0.85rem;
+        font-weight: 500;
+    }
+
+    .col-title {
+        min-width: 250px;
+    }
+
+    .topic-title-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .topic-title-cell strong {
+        color: #1a1a1a;
+        font-size: 0.95rem;
+    }
+
+    .topic-slug {
+        font-size: 0.7rem;
+        background: #f3f4f6;
+        padding: 0.125rem 0.375rem;
+        border-radius: 3px;
+        color: #6b7280;
+        width: fit-content;
+    }
+
+    .topic-desc {
+        font-size: 0.8rem;
+        color: #9ca3af;
+        max-width: 300px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .col-articles,
+    .col-readers,
+    .col-rating {
+        text-align: center;
+        width: 80px;
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .col-status {
+        width: 100px;
+    }
+
+    .status-badges {
+        display: flex;
+        gap: 0.25rem;
+    }
+
+    .status-badge {
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 500;
+    }
+
+    .status-badge.active {
+        background: #d1fae5;
+        color: #065f46;
+    }
+
+    .status-badge.inactive {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+
+    .status-badge.hidden {
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .col-ai {
+        width: 50px;
+        text-align: center;
+    }
+
+    .ai-badge {
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 500;
+    }
+
+    .ai-badge.enabled {
+        background: #dbeafe;
+        color: #1e40af;
+    }
+
+    .ai-badge.disabled {
+        background: #f3f4f6;
+        color: #6b7280;
+    }
+
+    .col-actions {
+        width: 140px;
+    }
+
+    .action-buttons {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .btn-edit {
+        padding: 0.375rem 0.75rem;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 500;
+        transition: background 0.2s;
+    }
+
+    .btn-edit:hover {
+        background: #2563eb;
+    }
+
+    .btn-delete {
+        padding: 0.375rem 0.75rem;
+        background: #ef4444;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 500;
+        transition: background 0.2s;
+    }
+
+    .btn-delete:hover {
+        background: #dc2626;
+    }
+
+    /* Topic Modal */
+    .topic-modal {
+        min-width: 500px;
+        max-width: 600px;
+    }
+
+    .topic-form {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        margin: 1.5rem 0;
+    }
+
+    .topic-form .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+    }
+
+    .topic-form label {
+        font-weight: 500;
+        color: #374151;
+        font-size: 0.875rem;
+    }
+
+    .topic-form input,
+    .topic-form textarea {
+        padding: 0.625rem 0.75rem;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 0.875rem;
+        font-family: inherit;
+        transition: border-color 0.2s;
+    }
+
+    .topic-form input:focus,
+    .topic-form textarea:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .topic-form input[type="color"] {
+        height: 40px;
+        padding: 0.25rem;
+        cursor: pointer;
+    }
+
+    .topic-form textarea {
+        resize: vertical;
+        min-height: 80px;
+    }
+
+    .form-row {
+        display: flex;
+        gap: 1rem;
+    }
+
+    .form-row .form-group {
+        flex: 1;
+    }
+
+    .checkboxes {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        background: #f9fafb;
+        padding: 1rem;
+        border-radius: 6px;
+    }
+
+    .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        cursor: pointer;
+    }
+
+    .checkbox-label input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+    }
+
+    .checkbox-label span:first-of-type {
+        font-weight: 500;
+        color: #374151;
+    }
+
+    .checkbox-label .help-text {
+        font-size: 0.75rem;
+        color: #9ca3af;
+        margin-left: auto;
     }
 </style>

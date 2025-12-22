@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 from agents.main_chat_agent import MainChatAgent
 from services.google_search_service import GoogleSearchService
+from dependencies import get_valid_topics
 import os
 import logging
 
@@ -91,23 +92,21 @@ class AgentService:
         Return list of available content agents.
 
         Returns:
-            List of agent type strings
+            List of agent type strings (topic slugs from database)
         """
-        return ["macro", "equity", "fixed_income", "esg"]
+        return get_valid_topics(self.db)
 
     def get_agent_descriptions(self) -> Dict[str, str]:
         """
-        Get descriptions of each content agent.
+        Get descriptions of each content agent from database.
 
         Returns:
-            Dictionary mapping agent types to descriptions
+            Dictionary mapping agent types (slugs) to descriptions
         """
-        return {
-            "macro": "Macroeconomic analysis: economic indicators, central bank policy, FX markets",
-            "equity": "Equity markets: stocks, company analysis, valuations, market trends",
-            "fixed_income": "Fixed income: bonds, yields, credit markets, treasuries",
-            "esg": "ESG investing: environmental, social, governance factors and sustainability"
-        }
+        from models import Topic
+
+        topics = self.db.query(Topic).filter(Topic.active == True).all()
+        return {t.slug: t.description or t.title for t in topics}
 
     def get_statistics(self) -> Dict:
         """
@@ -143,8 +142,8 @@ class AgentService:
         logger.info("║" + f" Query: {query[:60]}{'...' if len(query) > 60 else ''}".ljust(78) + "║")
         logger.info("╚" + "═" * 78 + "╝")
 
-        # Validate topic
-        valid_topics = ["macro", "equity", "fixed_income", "esg"]
+        # Validate topic against database
+        valid_topics = get_valid_topics(self.db)
         if topic not in valid_topics:
             raise ValueError(f"Invalid topic. Must be one of: {valid_topics}")
 

@@ -1,15 +1,56 @@
 """
-Database seeding script - creates initial admin user and groups
+Database seeding script - creates initial admin user, topics, and groups
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import db_settings
-from models import Base, User, Group
+from models import Base, User, Group, Topic, ContentArticle
 import sys
 
 
+# Define topics with their metadata
+TOPICS = [
+    {
+        "slug": "macro",
+        "title": "Macroeconomic Research",
+        "description": "Global economic trends, central bank policies, and macroeconomic analysis",
+        "agent_type": "economist",
+        "icon": "globe",
+        "color": "#4A90D9",
+        "sort_order": 1
+    },
+    {
+        "slug": "equity",
+        "title": "Equity Research",
+        "description": "Stock analysis, company fundamentals, and equity market insights",
+        "agent_type": "equity",
+        "icon": "trending-up",
+        "color": "#48BB78",
+        "sort_order": 2
+    },
+    {
+        "slug": "fixed_income",
+        "title": "Fixed Income Research",
+        "description": "Bond markets, interest rates, and fixed income analysis",
+        "agent_type": "fixed_income",
+        "icon": "bar-chart",
+        "color": "#9F7AEA",
+        "sort_order": 3
+    },
+    {
+        "slug": "esg",
+        "title": "ESG Research",
+        "description": "Environmental, social, and governance factors in investing",
+        "agent_type": "esg",
+        "icon": "leaf",
+        "color": "#38B2AC",
+        "sort_order": 4
+    }
+]
+
+
 def seed_database():
-    """Create initial admin user and groups"""
+    """Create initial admin user, topics, and groups"""
     engine = create_engine(db_settings.database_url)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
@@ -29,44 +70,72 @@ def seed_database():
         else:
             print("→ 'global:admin' group already exists")
 
-        # Create topic groups for content management (new groupname:role format)
-        # Include admin, analyst, editor, reader roles for each topic
-        topic_groups = [
-            # Equity groups
-            ("equity:admin", "equity", "admin", "Admin for Equity content"),
-            ("equity:analyst", "equity", "analyst", "Equity analysts - can edit equity research content"),
-            ("equity:editor", "equity", "editor", "Editor for Equity content"),
-            ("equity:reader", "equity", "reader", "Reader for Equity content"),
-            # Fixed Income groups
-            ("fixed_income:admin", "fixed_income", "admin", "Admin for Fixed Income content"),
-            ("fixed_income:analyst", "fixed_income", "analyst", "Fixed Income analysts - can edit fixed income research content"),
-            ("fixed_income:editor", "fixed_income", "editor", "Editor for Fixed Income content"),
-            ("fixed_income:reader", "fixed_income", "reader", "Reader for Fixed Income content"),
-            # Macro groups
-            ("macro:admin", "macro", "admin", "Admin for Macroeconomic content"),
-            ("macro:analyst", "macro", "analyst", "Macro analysts - can edit macroeconomic research content"),
-            ("macro:editor", "macro", "editor", "Editor for Macroeconomic content"),
-            ("macro:reader", "macro", "reader", "Reader for Macroeconomic content"),
-            # ESG groups
-            ("esg:admin", "esg", "admin", "Admin for ESG content"),
-            ("esg:analyst", "esg", "analyst", "ESG analysts - can edit ESG research content"),
-            ("esg:editor", "esg", "editor", "Editor for ESG content"),
-            ("esg:reader", "esg", "reader", "Reader for ESG content"),
-        ]
-
-        for group_name, groupname, role, description in topic_groups:
-            group = db.query(Group).filter(Group.name == group_name).first()
-            if not group:
-                group = Group(
-                    name=group_name,
-                    groupname=groupname,
-                    role=role,
-                    description=description
+        # Create topics and their groups
+        for topic_data in TOPICS:
+            topic = db.query(Topic).filter(Topic.slug == topic_data["slug"]).first()
+            if not topic:
+                topic = Topic(
+                    slug=topic_data["slug"],
+                    title=topic_data["title"],
+                    description=topic_data["description"],
+                    agent_type=topic_data.get("agent_type"),
+                    icon=topic_data.get("icon"),
+                    color=topic_data.get("color"),
+                    sort_order=topic_data.get("sort_order", 0),
+                    visible=True,
+                    searchable=True,
+                    active=True
                 )
-                db.add(group)
-                print(f"✓ Created '{group_name}' group")
+                db.add(topic)
+                db.flush()  # Get the topic ID
+                print(f"✓ Created topic '{topic.slug}'")
             else:
-                print(f"→ '{group_name}' group already exists")
+                print(f"→ Topic '{topic.slug}' already exists")
+
+            # Create 4 groups for this topic
+            roles = ["admin", "analyst", "editor", "reader"]
+            role_descriptions = {
+                "admin": f"Admin for {topic_data['title']}",
+                "analyst": f"{topic_data['title']} analysts - can create and edit content",
+                "editor": f"Editor for {topic_data['title']}",
+                "reader": f"Reader for {topic_data['title']}"
+            }
+
+            for role in roles:
+                group_name = f"{topic_data['slug']}:{role}"
+                group = db.query(Group).filter(Group.name == group_name).first()
+                if not group:
+                    group = Group(
+                        name=group_name,
+                        groupname=topic_data["slug"],
+                        role=role,
+                        topic_id=topic.id,
+                        description=role_descriptions[role]
+                    )
+                    db.add(group)
+                    print(f"✓ Created '{group_name}' group")
+                else:
+                    # Link existing group to topic if not already linked
+                    if not group.topic_id:
+                        group.topic_id = topic.id
+                        print(f"→ Linked '{group_name}' group to topic")
+                    else:
+                        print(f"→ '{group_name}' group already exists")
+
+        # Migrate existing articles to link to topics
+        # Find articles with legacy 'topic' field but no topic_id
+        articles_to_migrate = db.query(ContentArticle).filter(
+            ContentArticle.topic_id.is_(None),
+            ContentArticle.topic.isnot(None)
+        ).all()
+
+        if articles_to_migrate:
+            for article in articles_to_migrate:
+                topic = db.query(Topic).filter(Topic.slug == article.topic).first()
+                if topic:
+                    article.topic_id = topic.id
+                    print(f"→ Migrated article {article.id} to topic '{topic.slug}'")
+            print(f"✓ Migrated {len(articles_to_migrate)} articles to topics")
 
         # Create default admin user if it doesn't exist
         admin_email = "simon.haller@gmx.net"

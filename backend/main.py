@@ -115,12 +115,14 @@ try:
     from api.content import router as content_router
     from api.prompts import router as prompts_router
     from api.resources import router as resources_router
+    from api.topics import router as topics_router
 
     app.include_router(admin_prompts_router)
     app.include_router(user_profile_router)
     app.include_router(content_router)
     app.include_router(prompts_router)
     app.include_router(resources_router)
+    app.include_router(topics_router)
 except ImportError as e:
     print(f"Warning: Multi-agent API routers not available: {e}")
 

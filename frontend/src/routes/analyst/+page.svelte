@@ -2,34 +2,39 @@
     import { auth } from '$lib/stores/auth';
     import { goto } from '$app/navigation';
     import { onMount } from 'svelte';
-
-    const allTopics = [
-        'macro',
-        'equity',
-        'fixed_income',
-        'esg'
-    ];
+    import { getTopics } from '$lib/api';
 
     function hasTopicAccess(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
-        // Only analyst role grants access to analyst dashboard
+        // Global admin can access all topics
+        if ($auth.user.scopes.includes('global:admin')) return true;
+        // Or analyst role grants access
         return $auth.user.scopes.includes(`${topic}:analyst`);
     }
 
-    onMount(() => {
+    onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
             return;
         }
 
-        // Find first available topic for user
-        const firstTopic = allTopics.find(topic => hasTopicAccess(topic));
+        try {
+            // Load topics from database
+            const dbTopics = await getTopics(); // Show all topics
+            const sortedTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
 
-        if (firstTopic) {
-            // Redirect to first available topic
-            goto(`/analyst/${firstTopic}`);
-        } else {
-            // No analyst permissions, redirect home
+            // Find first available topic for user
+            const firstTopic = sortedTopics.find(topic => hasTopicAccess(topic.slug));
+
+            if (firstTopic) {
+                // Redirect to first available topic
+                goto(`/analyst/${firstTopic.slug}`);
+            } else {
+                // No analyst permissions, redirect home
+                goto('/');
+            }
+        } catch (e) {
+            console.error('Error loading topics:', e);
             goto('/');
         }
     });

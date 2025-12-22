@@ -6,10 +6,12 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Any
 from pydantic import BaseModel
 from database import get_db
-from models import Resource, ResourceType, ResourceStatus, TimeseriesFrequency, TimeseriesDataType, Group, ContentArticle
+from models import Resource, ResourceType, ResourceStatus, TimeseriesFrequency, TimeseriesDataType, Group, ContentArticle, article_resources
 from services.resource_service import ResourceService
+from services.article_resource_service import ArticleResourceService
+from services.table_resource_service import TableResourceService
 from services.storage_service import get_storage, StorageService
-from dependencies import get_current_user, require_admin, is_global_admin, has_role
+from dependencies import get_current_user, require_admin, is_global_admin, has_role, get_valid_topics
 import json
 import os
 import uuid
@@ -143,6 +145,23 @@ class UpdateResourceRequest(BaseModel):
 class UpdateResourceStatusRequest(BaseModel):
     """Request to update resource status (editorial workflow)."""
     status: str  # draft, editor, published
+
+
+class UpdateTextContentRequest(BaseModel):
+    """Request to update text resource content."""
+    content: str
+    encoding: str = "utf-8"
+
+
+class UpdateTableContentRequest(BaseModel):
+    """Request to update table resource content."""
+    table_data: dict  # {"columns": [...], "data": [[...], ...]}
+    column_types: Optional[dict] = None
+
+
+class UpdateTimeseriesDataRequest(BaseModel):
+    """Request to update timeseries data."""
+    data: List[dict]  # List of {"timestamp": ..., "values": {...}}
 
 
 class LinkArticleRequest(BaseModel):
@@ -289,22 +308,27 @@ async def list_group_resources(
     """
     List resources for a specific topic group.
 
-    Requires topic:admin permission or global:admin.
+    Any user with access to the topic can view resources (for attaching to articles).
     """
     scopes = current_user.get("scopes", [])
 
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid topic: {topic}"
         )
 
-    # Permission check
-    if not is_global_admin(scopes) and not has_role(scopes, topic, "admin"):
+    # Permission check - user needs any role in this topic to view resources
+    if not is_global_admin(scopes) and not (
+        has_role(scopes, topic, "admin") or
+        has_role(scopes, topic, "analyst") or
+        has_role(scopes, topic, "editor") or
+        has_role(scopes, topic, "reader")
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You need '{topic}:admin' or 'global:admin' to manage {topic} resources"
+            detail=f"You need access to '{topic}' to view its resources"
         )
 
     # Get group ID for this topic
@@ -345,12 +369,12 @@ async def list_global_resources(
     offset: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(require_admin)
+    current_user: dict = Depends(get_current_user)
 ):
     """
-    List global resources (resources in the 'global' group).
+    List global resources (resources with no group - group_id = NULL).
 
-    Requires global:admin permission.
+    Any authenticated user can view global resources for attaching to articles.
     """
     # Convert resource_type string to enum if provided
     rt = None
@@ -363,13 +387,9 @@ async def list_global_resources(
                 detail=f"Invalid resource type: {resource_type}"
             )
 
-    # Get the 'global' group
-    global_group = db.query(Group).filter(Group.name == "global").first()
-    global_group_id = global_group.id if global_group else None
-
-    # Get resources in the global group
+    # Get resources with no group (group_id = NULL) and not linked to any article
     resources, total = ResourceService.list_resources(
-        db, rt, global_group_id, None, search, offset, limit
+        db, rt, None, None, search, offset, limit, global_only=True, exclude_article_linked=True
     )
 
     return ResourceListResponse(
@@ -481,6 +501,17 @@ async def create_table_resource(
             column_types=request.column_types,
             parent_id=request.parent_id
         )
+
+        # Create HTML child resource for the table
+        html_resource, image_resource = TableResourceService.create_table_publication_resources(
+            db=db,
+            table_resource=resource,
+            user_id=user_id
+        )
+        if html_resource:
+            import logging
+            logger = logging.getLogger("uvicorn")
+            logger.info(f"Created HTML child resource for table {resource.id}")
 
         return ResourceDetailResponse(**ResourceService.get_resource(db, resource.id))
     except ValueError as e:
@@ -924,6 +955,165 @@ async def update_resource(
     return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
 
 
+@router.put("/{resource_id}/text-content", response_model=ResourceDetailResponse)
+async def update_text_content(
+    resource_id: int,
+    request: UpdateTextContentRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update text resource content."""
+    resource_data = ResourceService.get_resource(db, resource_id)
+
+    if not resource_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"
+        )
+
+    if resource_data.get("resource_type") != "text":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Resource is not a text resource"
+        )
+
+    scopes = current_user.get("scopes", [])
+    if not can_manage_resource(scopes, resource_data.get("group_id"), db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to modify this resource"
+        )
+
+    user_id = int(current_user.get("sub"))
+
+    updated = ResourceService.update_text_content(
+        db=db,
+        resource_id=resource_id,
+        content=request.content,
+        encoding=request.encoding,
+        user_id=user_id
+    )
+
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update text content"
+        )
+
+    return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
+
+
+@router.put("/{resource_id}/table-content", response_model=ResourceDetailResponse)
+async def update_table_content(
+    resource_id: int,
+    request: UpdateTableContentRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update table resource content."""
+    resource_data = ResourceService.get_resource(db, resource_id)
+
+    if not resource_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"
+        )
+
+    if resource_data.get("resource_type") != "table":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Resource is not a table resource"
+        )
+
+    scopes = current_user.get("scopes", [])
+    if not can_manage_resource(scopes, resource_data.get("group_id"), db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to modify this resource"
+        )
+
+    user_id = int(current_user.get("sub"))
+
+    updated = ResourceService.update_table_content(
+        db=db,
+        resource_id=resource_id,
+        table_data=request.table_data,
+        column_types=request.column_types,
+        user_id=user_id
+    )
+
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update table content"
+        )
+
+    # Regenerate HTML child resource for the table
+    table_resource = db.query(Resource).filter(Resource.id == resource_id).first()
+    if table_resource:
+        # Delete old child resources first
+        TableResourceService.delete_table_publication_resources(db, resource_id)
+        # Create new ones with updated data
+        html_resource, image_resource = TableResourceService.create_table_publication_resources(
+            db=db,
+            table_resource=table_resource,
+            user_id=user_id
+        )
+        if html_resource:
+            import logging
+            logger = logging.getLogger("uvicorn")
+            logger.info(f"Regenerated HTML child resource for table {resource_id}")
+
+    return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
+
+
+@router.put("/{resource_id}/timeseries-data", response_model=ResourceDetailResponse)
+async def update_timeseries_data(
+    resource_id: int,
+    request: UpdateTimeseriesDataRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update timeseries data."""
+    resource_data = ResourceService.get_resource(db, resource_id)
+
+    if not resource_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"
+        )
+
+    if resource_data.get("resource_type") != "timeseries":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Resource is not a timeseries resource"
+        )
+
+    scopes = current_user.get("scopes", [])
+    if not can_manage_resource(scopes, resource_data.get("group_id"), db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to modify this resource"
+        )
+
+    user_id = int(current_user.get("sub"))
+
+    updated = ResourceService.update_timeseries_data(
+        db=db,
+        resource_id=resource_id,
+        data=request.data,
+        user_id=user_id
+    )
+
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update timeseries data"
+        )
+
+    return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
+
+
 @router.delete("/{resource_id}")
 async def delete_resource(
     resource_id: int,
@@ -1114,6 +1304,10 @@ async def update_resource_status(
 
     Status transitions: draft -> editor -> published
     Same workflow as articles.
+
+    Note: Child resources (HTML, PDF for articles; HTML for tables) are now
+    created/updated on save, not on status change. This endpoint only changes
+    the status flag.
     """
     # Get current resource
     resource_data = ResourceService.get_resource(db, resource_id)
@@ -1249,6 +1443,18 @@ async def get_resource_content(
     if resource_type == "text":
         text_data = resource_data.get("text_data", {})
         content = text_data.get("content", "")
+
+        # Check if content is HTML (for article HTML resources)
+        content_stripped = content.strip().lower()
+        if content_stripped.startswith("<!doctype html") or content_stripped.startswith("<html"):
+            return Response(
+                content=content,
+                media_type="text/html; charset=utf-8",
+                headers={
+                    "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+                }
+            )
+
         return Response(
             content=content,
             media_type="text/plain; charset=utf-8",
@@ -1263,6 +1469,87 @@ async def get_resource_content(
         return Response(
             content=json.dumps(table_data.get("data", {})),
             media_type="application/json",
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+            }
+        )
+
+    # Handle article resources (fallback for old articles without popup HTML file)
+    if resource_type == "article":
+        # Get the resource to find linked article
+        resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
+        if not resource:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Resource not found"
+            )
+
+        # Find linked article
+        article_link = db.execute(
+            article_resources.select().where(
+                article_resources.c.resource_id == resource.id
+            )
+        ).first()
+
+        if not article_link:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Article not found for this resource"
+            )
+
+        article = db.query(ContentArticle).filter(
+            ContentArticle.id == article_link.article_id
+        ).first()
+
+        if not article:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Article not found"
+            )
+
+        # Get markdown content from text_data
+        text_data = resource_data.get("text_data", {})
+        content = text_data.get("content", "")
+
+        # Get child resources for PDF and HTML links
+        children = db.query(Resource).filter(
+            Resource.parent_id == resource.id,
+            Resource.is_active == True
+        ).all()
+
+        pdf_hash_id = None
+        html_hash_id = None
+        for child in children:
+            if child.resource_type == ResourceType.PDF:
+                pdf_hash_id = child.hash_id
+            elif child.resource_type == ResourceType.TEXT:
+                html_hash_id = child.hash_id
+
+        # Generate popup HTML on-the-fly
+        base_url = os.environ.get("API_BASE_URL", "")
+        created_at_str = article.created_at.isoformat() if article.created_at else ""
+
+        popup_html = ArticleResourceService._generate_article_popup_html(
+            article_id=article.id,
+            headline=article.headline,
+            content=content,
+            topic=article.topic or "",
+            created_at=created_at_str,
+            keywords=article.keywords,
+            readership_count=article.readership_count or 0,
+            rating=article.rating,
+            rating_count=article.rating_count or 0,
+            author=article.author,
+            editor=article.editor,
+            pdf_hash_id=pdf_hash_id,
+            html_hash_id=html_hash_id,
+            db=db,
+            base_url=base_url
+        )
+
+        return Response(
+            content=popup_html,
+            media_type="text/html; charset=utf-8",
             headers={
                 "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
             }
@@ -1285,6 +1572,8 @@ async def get_resource_content_info(
 
     Returns minimal metadata without requiring authentication.
     Useful for checking if a resource exists and its type.
+
+    For table resources, also returns html_child_hash_id for embedding.
     """
     resource_data = ResourceService.get_resource_by_hash_id(db, hash_id)
 
@@ -1294,9 +1583,94 @@ async def get_resource_content_info(
             detail="Resource not found"
         )
 
-    return {
+    result = {
         "hash_id": hash_id,
         "name": resource_data.get("name"),
         "resource_type": resource_data.get("resource_type"),
         "status": resource_data.get("status")
     }
+
+    # For table resources, find the HTML child for embedding
+    if resource_data.get("resource_type") == "table":
+        resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
+        if resource:
+            html_child = db.query(Resource).filter(
+                Resource.parent_id == resource.id,
+                Resource.resource_type == ResourceType.HTML,
+                Resource.is_active == True
+            ).first()
+            if html_child:
+                result["html_child_hash_id"] = html_child.hash_id
+            # Also include image child hash for PDF embedding
+            image_child = db.query(Resource).filter(
+                Resource.parent_id == resource.id,
+                Resource.resource_type == ResourceType.IMAGE,
+                Resource.is_active == True
+            ).first()
+            if image_child:
+                result["image_child_hash_id"] = image_child.hash_id
+
+    return result
+
+
+@router.get("/content/{hash_id}/embed")
+async def get_resource_embed_html(
+    hash_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get embeddable HTML fragment for a table resource.
+
+    Returns the table as an HTML fragment (styles + table + script) that can be
+    directly embedded into another HTML document without an iframe.
+
+    For table resources, generates an interactive table with:
+    - Column sorting (click header)
+    - Column reordering (drag & drop headers)
+    - Row selection (click rows, Ctrl+click for multi-select, Shift+click for range)
+    - Column selection (Ctrl+click header)
+    - Copy to clipboard (Ctrl+C on selected rows/column)
+    """
+    from services.table_resource_service import TableResourceService
+
+    resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
+    if not resource:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"
+        )
+
+    if resource.resource_type != ResourceType.TABLE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Embed endpoint only supports table resources"
+        )
+
+    if not resource.table_resource:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Table data not found"
+        )
+
+    # Generate unique table ID based on hash
+    table_id = f"table-{hash_id}"
+
+    # Get table data
+    columns = resource.table_resource.columns or []
+    data = resource.table_resource.data or []
+
+    # Generate embeddable HTML fragment
+    embed_html = TableResourceService._generate_embeddable_table_html(
+        table_id=table_id,
+        name=resource.name,
+        columns=columns,
+        data=data
+    )
+
+    return Response(
+        content=embed_html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )

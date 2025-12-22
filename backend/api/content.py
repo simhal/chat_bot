@@ -7,8 +7,15 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from database import get_db
 from services.content_service import ContentService
+from services.content_cache import ContentCache
 from services.pdf_service import PDFService
-from dependencies import get_current_user, require_admin, require_analyst
+from services.article_resource_service import ArticleResourceService
+from services.vector_service import VectorService
+from dependencies import get_current_user, require_admin, require_analyst, get_valid_topics
+from models import ContentArticle, User
+import logging
+
+logger = logging.getLogger("uvicorn")
 
 
 router = APIRouter(prefix="/api/content", tags=["content"])
@@ -27,6 +34,8 @@ class ArticleResponse(BaseModel):
     rating_count: int
     keywords: Optional[str]
     status: str  # draft, editor, or published
+    priority: int
+    is_sticky: bool
     created_at: str
     updated_at: str
     created_by_agent: str
@@ -44,10 +53,16 @@ class EditArticleRequest(BaseModel):
     author: Optional[str] = None
     editor: Optional[str] = None
     status: Optional[str] = None  # draft, editor, or published
+    priority: Optional[int] = None
+    is_sticky: Optional[bool] = None
 
 
 class CreateContentRequest(BaseModel):
     query: str  # The query to send to the content agent
+
+
+class CreateEmptyArticleRequest(BaseModel):
+    headline: Optional[str] = "New Article"
 
 
 class ContentAgentChatRequest(BaseModel):
@@ -79,8 +94,8 @@ async def get_topic_articles(
     Returns:
         List of articles
     """
-    # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    # Validate topic against database
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -115,8 +130,8 @@ async def get_top_rated_articles(
     Returns:
         List of top-rated articles
     """
-    # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    # Validate topic against database
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -151,8 +166,8 @@ async def get_most_read_articles(
     Returns:
         List of most-read articles
     """
-    # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    # Validate topic against database
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -266,8 +281,8 @@ async def search_articles(
     Returns:
         List of matching articles (default: 10 most relevant)
     """
-    # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg", "all"]
+    # Validate topic against database (plus 'all' option)
+    valid_topics = get_valid_topics(db) + ["all"]
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -320,8 +335,8 @@ async def admin_get_all_articles(
     Returns:
         List of articles
     """
-    # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    # Validate topic against database
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -433,8 +448,28 @@ async def edit_article(
             keywords=request.keywords,
             author=request.author,
             editor=request.editor,
-            status=request.status
+            status=request.status,
+            priority=request.priority,
+            is_sticky=request.is_sticky
         )
+
+        # Regenerate article resources (PDF, HTML) when content or headline changes
+        if request.content is not None or request.headline is not None:
+            user_id = int(user.get("sub"))
+            article_model = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+            if article_model:
+                # Get current content from ChromaDB
+                content = VectorService.get_article_content(article_id)
+                if content:
+                    parent, html_res, pdf_res = ArticleResourceService.create_article_resources(
+                        db=db,
+                        article=article_model,
+                        content=content,
+                        editor_user_id=user_id
+                    )
+                    if parent:
+                        logger.info(f"Regenerated resources for article {article_id} on save")
+
         return updated_article
     except ValueError as e:
         raise HTTPException(
@@ -462,8 +497,8 @@ async def generate_content(
     Returns:
         Newly created article
     """
-    # Validate topic
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    # Validate topic against database
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -489,6 +524,55 @@ async def generate_content(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating content: {str(e)}"
+        )
+
+
+@router.post("/article/new/{topic}", response_model=ArticleResponse)
+async def create_empty_article(
+    topic: str,
+    request: CreateEmptyArticleRequest = CreateEmptyArticleRequest(),
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Create a new empty article. Requires analyst permission for the topic.
+
+    Args:
+        topic: Topic name (macro, equity, fixed_income, esg)
+        request: Optional headline for the new article
+        db: Database session
+        user: Current authenticated user (must be analyst for this topic)
+
+    Returns:
+        Newly created empty article
+    """
+    # Validate topic against database
+    valid_topics = get_valid_topics(db)
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic. Must be one of: {valid_topics}"
+        )
+
+    # Check if user has analyst permission for this topic
+    analyst_check = require_analyst(topic)
+    analyst_check(user)  # This will raise HTTPException if user doesn't have permission
+
+    # Create empty article
+    try:
+        article = ContentService.create_article(
+            db=db,
+            topic=topic,
+            headline=request.headline or "New Article",
+            content="",  # Empty content
+            keywords="",
+            agent_name="manual"
+        )
+        return article
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error creating article: {str(e)}"
         )
 
 
@@ -631,7 +715,8 @@ async def download_article_pdf(
             keywords=article.get("keywords"),
             readership_count=article["readership_count"],
             rating=article.get("rating"),
-            rating_count=article["rating_count"]
+            rating_count=article["rating_count"],
+            db=db
         )
 
         # Create a safe filename from the headline
@@ -670,7 +755,7 @@ async def get_analyst_draft_articles(
     """
     Get draft articles for analyst view. Requires analyst permission for the topic.
     """
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -698,8 +783,8 @@ async def get_editor_articles(
     Get articles in 'editor' status for editor review. Requires editor permission.
     """
     from dependencies import require_editor
-    
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -725,7 +810,7 @@ async def get_published_articles(
     """
     Get published articles for a topic. Available to all authenticated users.
     """
-    valid_topics = ["macro", "equity", "fixed_income", "esg"]
+    valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -841,6 +926,180 @@ async def publish_article(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.get("/article/{article_id}/resources")
+async def get_article_publication_resources(
+    article_id: int,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Get publication resource URLs for a published article.
+
+    Returns hash_ids that can be used with /api/resources/content/{hash_id}
+    for public access to HTML and PDF versions.
+    """
+    from services.article_resource_service import ArticleResourceService
+
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+
+    if article["status"] != "published":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only published articles have publication resources"
+        )
+
+    resources = ArticleResourceService.get_article_publication_resources(db, article_id)
+
+    # Build URLs using existing resource content endpoint
+    base_url = "/api/resources/content"
+    return {
+        "article_id": article_id,
+        "resources": {
+            "html_url": f"{base_url}/{resources['html']}" if resources['html'] else None,
+            "pdf_url": f"{base_url}/{resources['pdf']}" if resources['pdf'] else None,
+            "markdown_url": f"{base_url}/{resources['markdown']}" if resources['markdown'] else None
+        },
+        "hash_ids": resources
+    }
+
+
+@router.post("/admin/article/{article_id}/regenerate-resources")
+async def admin_regenerate_article_resources(
+    article_id: int,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Regenerate publication resources (HTML, PDF) for a published article.
+    Useful for articles published before the resource generation feature was implemented,
+    or to fix missing/broken resources.
+    """
+    from services.article_resource_service import ArticleResourceService
+    from models import User
+
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+    if not article:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+
+    if article["status"] != "published":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only published articles can have resources regenerated"
+        )
+
+    # Get the admin user for resource creation
+    admin_email = admin.get("email", "")
+    admin_user = db.query(User).filter(User.email == admin_email).first()
+    if not admin_user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin user not found"
+        )
+
+    # Delete existing ARTICLE resources first
+    ArticleResourceService.delete_article_resources(db, article_id)
+
+    # Get article content from ChromaDB
+    from services.vector_service import VectorService
+    content = VectorService.get_article_content(article_id)
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not retrieve article content from vector database"
+        )
+
+    # Create new resources
+    from models import ContentArticle
+    article_model = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+    ArticleResourceService.create_article_resources(db, article_model, content, admin_user.id)
+
+    resources = ArticleResourceService.get_article_publication_resources(db, article_id)
+
+    return {
+        "message": f"Resources regenerated for article {article_id}",
+        "resources": resources
+    }
+
+
+@router.post("/admin/regenerate-all-published-resources")
+async def admin_regenerate_all_published_resources(
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Regenerate publication resources for ALL published articles
+    that don't have resources yet.
+    """
+    from services.article_resource_service import ArticleResourceService
+    from models import User, ContentArticle
+
+    admin_email = admin.get("email", "")
+    admin_user = db.query(User).filter(User.email == admin_email).first()
+    if not admin_user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin user not found"
+        )
+
+    # Get all published articles
+    articles = db.query(ContentArticle).filter(ContentArticle.status == "published").all()
+
+    results = []
+    for article_model in articles:
+        article_id = article_model.id
+
+        # Check if resources already exist
+        existing = ArticleResourceService.get_article_publication_resources(db, article_id)
+        if existing.get("html") or existing.get("pdf"):
+            results.append({
+                "article_id": article_id,
+                "headline": article_model.headline,
+                "status": "skipped",
+                "reason": "Resources already exist"
+            })
+            continue
+
+        # Get article content from ChromaDB
+        from services.vector_service import VectorService
+        content = VectorService.get_article_content(article_id)
+        if not content:
+            results.append({
+                "article_id": article_id,
+                "headline": article_model.headline,
+                "status": "error",
+                "reason": "Could not retrieve content from vector database"
+            })
+            continue
+
+        try:
+            ArticleResourceService.create_article_resources(db, article_model, content, admin_user.id)
+            resources = ArticleResourceService.get_article_publication_resources(db, article_id)
+            results.append({
+                "article_id": article_id,
+                "headline": article_model.headline,
+                "status": "success",
+                "resources": resources
+            })
+        except Exception as e:
+            results.append({
+                "article_id": article_id,
+                "headline": article_model.headline,
+                "status": "error",
+                "reason": str(e)
+            })
+
+    successful = len([r for r in results if r["status"] == "success"])
+    skipped = len([r for r in results if r["status"] == "skipped"])
+    failed = len([r for r in results if r["status"] == "error"])
+
+    return {
+        "message": f"Processed {len(results)} articles: {successful} regenerated, {skipped} skipped, {failed} failed",
+        "results": results
+    }
+
+
 @router.post("/admin/article/{article_id}/recall")
 async def admin_recall_article(
     article_id: int,
@@ -878,3 +1137,48 @@ async def admin_purge_article(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
+
+
+# Article priority reordering
+
+class ArticleReorderItem(BaseModel):
+    """Item for reordering articles."""
+    id: int
+    priority: int
+
+
+class ArticleReorderRequest(BaseModel):
+    """Request model for bulk reordering articles."""
+    articles: List[ArticleReorderItem]
+
+
+@router.post("/admin/articles/reorder")
+async def reorder_articles(
+    request: ArticleReorderRequest,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Bulk update priority for multiple articles.
+    Requires global:admin scope.
+
+    Accepts a list of {id, priority} pairs and updates each article's priority.
+    """
+    from models import ContentArticle
+
+    updated = []
+    for item in request.articles:
+        article = db.query(ContentArticle).filter(ContentArticle.id == item.id).first()
+        if article:
+            article.priority = item.priority
+            updated.append(item.id)
+            # Invalidate cache
+            ContentCache.invalidate_article(item.id)
+            ContentCache.invalidate_topic(article.topic)
+
+    db.commit()
+
+    return {
+        "message": f"Reordered {len(updated)} articles",
+        "updated": updated
+    }

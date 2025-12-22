@@ -231,10 +231,26 @@ export async function rateArticle(articleId: number, rating: number) {
     });
 }
 
-export async function editArticle(articleId: number, headline?: string, content?: string, keywords?: string, status?: string) {
+export async function editArticle(
+    articleId: number,
+    headline?: string,
+    content?: string,
+    keywords?: string,
+    status?: string,
+    priority?: number,
+    is_sticky?: boolean
+) {
     return apiRequest(`/api/content/article/${articleId}/edit`, {
         method: 'PUT',
-        body: JSON.stringify({ headline, content, keywords, status })
+        body: JSON.stringify({ headline, content, keywords, status, priority, is_sticky })
+    });
+}
+
+// Reorder articles (admin only) - bulk update priorities
+export async function reorderArticles(articles: Array<{ id: number; priority: number }>): Promise<{ message: string; updated: number[] }> {
+    return apiRequest('/api/content/admin/articles/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ articles })
     });
 }
 
@@ -242,6 +258,13 @@ export async function generateContent(topic: string, query: string) {
     return apiRequest(`/api/content/generate/${topic}`, {
         method: 'POST',
         body: JSON.stringify({ query })
+    });
+}
+
+export async function createEmptyArticle(topic: string, headline?: string): Promise<{ id: number }> {
+    return apiRequest(`/api/content/article/new/${topic}`, {
+        method: 'POST',
+        body: JSON.stringify({ headline: headline || 'New Article' })
     });
 }
 
@@ -728,6 +751,41 @@ export async function updateResourceStatus(resourceId: number, status: string): 
     });
 }
 
+// Update text resource content
+export async function updateTextContent(
+    resourceId: number,
+    content: string,
+    encoding: string = 'utf-8'
+): Promise<ResourceDetail> {
+    return apiRequest(`/api/resources/${resourceId}/text-content`, {
+        method: 'PUT',
+        body: JSON.stringify({ content, encoding })
+    });
+}
+
+// Update table resource content
+export async function updateTableContent(
+    resourceId: number,
+    tableData: { columns: string[]; data: any[][] },
+    columnTypes?: Record<string, string>
+): Promise<ResourceDetail> {
+    return apiRequest(`/api/resources/${resourceId}/table-content`, {
+        method: 'PUT',
+        body: JSON.stringify({ table_data: tableData, column_types: columnTypes })
+    });
+}
+
+// Update timeseries data
+export async function updateTimeseriesData(
+    resourceId: number,
+    data: Array<{ timestamp: string; values: Record<string, any> }>
+): Promise<ResourceDetail> {
+    return apiRequest(`/api/resources/${resourceId}/timeseries-data`, {
+        method: 'PUT',
+        body: JSON.stringify({ data })
+    });
+}
+
 // Get articles linked to a resource
 export async function getResourceArticles(resourceId: number): Promise<{ articles: any[]; count: number }> {
     return apiRequest(`/api/resources/${resourceId}/articles`);
@@ -744,7 +802,30 @@ export async function getArticleResources(articleId: number): Promise<{ resource
  * Example: <img src={getResourceContentUrl(resource.hash_id)} />
  */
 export function getResourceContentUrl(hashId: string): string {
-    return `${API_BASE}/api/resources/content/${hashId}`;
+    return `${PUBLIC_API_URL}/api/resources/content/${hashId}`;
+}
+
+/**
+ * Resource info returned by the public info endpoint.
+ */
+export interface ResourceInfo {
+    hash_id: string;
+    name: string;
+    resource_type: string;
+    status: string;
+}
+
+/**
+ * Get public info about a resource by hash_id.
+ * This is a public endpoint - no authentication required.
+ * Useful for rendering resource links in markdown previews.
+ */
+export async function getResourceInfo(hashId: string): Promise<ResourceInfo> {
+    const response = await fetch(`${PUBLIC_API_URL}/api/resources/content/${hashId}/info`);
+    if (!response.ok) {
+        throw new Error('Resource not found');
+    }
+    return response.json();
 }
 
 // Create text resource and link to article
@@ -808,4 +889,168 @@ export async function uploadFileResource(
     }
 
     return response.json();
+}
+
+// =============================================================================
+// Topic Management API functions
+// =============================================================================
+
+export interface Topic {
+    id: number;
+    slug: string;
+    title: string;
+    description: string | null;
+    visible: boolean;
+    searchable?: boolean;
+    active: boolean;
+    reader_count?: number;
+    rating_average?: number | null;
+    article_count: number;
+    agent_type?: string | null;
+    agent_config?: Record<string, any> | null;
+    access_mainchat: boolean;
+    icon: string | null;
+    color: string | null;
+    sort_order: number;
+    article_order: string;  // 'date', 'priority', 'title'
+    created_at?: string;
+    updated_at?: string;
+}
+
+export interface TopicCreate {
+    slug: string;
+    title: string;
+    description?: string;
+    visible?: boolean;
+    searchable?: boolean;
+    active?: boolean;
+    agent_type?: string;
+    agent_config?: Record<string, any>;
+    access_mainchat?: boolean;
+    icon?: string;
+    color?: string;
+    sort_order?: number;
+    article_order?: string;  // 'date', 'priority', 'title'
+}
+
+export interface TopicUpdate {
+    title?: string;
+    description?: string;
+    visible?: boolean;
+    searchable?: boolean;
+    active?: boolean;
+    agent_type?: string;
+    agent_config?: Record<string, any>;
+    access_mainchat?: boolean;
+    icon?: string;
+    color?: string;
+    sort_order?: number;
+    article_order?: string;  // 'date', 'priority', 'title'
+}
+
+// Get all topics (authenticated)
+export async function getTopics(activeOnly: boolean = false, visibleOnly: boolean = false): Promise<Topic[]> {
+    const params = new URLSearchParams();
+    if (activeOnly) params.append('active_only', 'true');
+    if (visibleOnly) params.append('visible_only', 'true');
+    const query = params.toString();
+    return apiRequest(`/api/topics${query ? '?' + query : ''}`);
+}
+
+// Get public topics (no auth required)
+export async function getPublicTopics(): Promise<Topic[]> {
+    const response = await fetch(`${PUBLIC_API_URL}/api/topics/public`);
+    if (!response.ok) {
+        throw new Error('Failed to fetch topics');
+    }
+    return response.json();
+}
+
+// Get a single topic by slug
+export async function getTopic(slug: string): Promise<Topic> {
+    return apiRequest(`/api/topics/${slug}`);
+}
+
+// Create a new topic (admin only)
+export async function createTopic(topic: TopicCreate): Promise<Topic> {
+    return apiRequest('/api/topics', {
+        method: 'POST',
+        body: JSON.stringify(topic)
+    });
+}
+
+// Update a topic (admin only)
+export async function updateTopic(slug: string, updates: TopicUpdate): Promise<Topic> {
+    return apiRequest(`/api/topics/${slug}`, {
+        method: 'PATCH',
+        body: JSON.stringify(updates)
+    });
+}
+
+// Delete a topic (admin only)
+export async function deleteTopic(slug: string, force: boolean = false): Promise<{ message: string; deleted_id: number }> {
+    const params = force ? '?force=true' : '';
+    return apiRequest(`/api/topics/${slug}${params}`, {
+        method: 'DELETE'
+    });
+}
+
+// Recalculate topic stats (admin only)
+export async function recalculateTopicStats(slug: string): Promise<{ message: string; article_count: number; reader_count: number; rating_average: number | null }> {
+    return apiRequest(`/api/topics/${slug}/recalculate-stats`, {
+        method: 'POST'
+    });
+}
+
+// Recalculate all topic stats (admin only)
+export async function recalculateAllTopicStats(): Promise<{ message: string; count: number }> {
+    return apiRequest('/api/topics/recalculate-all', {
+        method: 'POST'
+    });
+}
+
+// Reorder topics (admin only) - bulk update sort_order
+export async function reorderTopics(topics: Array<{ slug: string; sort_order: number }>): Promise<{ message: string; updated: string[] }> {
+    return apiRequest('/api/topics/reorder', {
+        method: 'POST',
+        body: JSON.stringify({ topics })
+    });
+}
+
+// Get groups for a topic (admin only)
+export async function getTopicGroups(slug: string): Promise<Array<{ id: number; name: string; groupname: string; role: string; description: string | null; user_count: number }>> {
+    return apiRequest(`/api/topics/${slug}/groups`);
+}
+
+// =============================================================================
+// Article Publication Resources
+// =============================================================================
+
+export interface ArticlePublicationResources {
+    article_id: number;
+    resources: {
+        html_url: string | null;
+        pdf_url: string | null;
+        markdown_url: string | null;
+    };
+    hash_ids: {
+        html: string | null;
+        pdf: string | null;
+        markdown: string | null;
+    };
+}
+
+// Get publication resources for a published article
+export async function getArticlePublicationResources(articleId: number): Promise<ArticlePublicationResources> {
+    return apiRequest(`/api/content/article/${articleId}/resources`);
+}
+
+// Helper to get full URL for published article HTML
+export function getPublishedArticleHtmlUrl(hashId: string): string {
+    return `${PUBLIC_API_URL}/api/resources/content/${hashId}`;
+}
+
+// Helper to get full URL for published article PDF download
+export function getPublishedArticlePdfUrl(hashId: string): string {
+    return `${PUBLIC_API_URL}/api/resources/content/${hashId}`;
 }

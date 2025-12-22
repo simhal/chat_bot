@@ -1,13 +1,10 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, generateContent, downloadArticlePDF, approveArticle, getGroupResources, type Resource } from '$lib/api';
+    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, createEmptyArticle, downloadArticlePDF, approveArticle, getTopics, type Topic as TopicType } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
-    import ResourceEditor from '$lib/components/ResourceEditor.svelte';
-
-    type Topic = 'macro' | 'equity' | 'fixed_income' | 'esg';
 
     interface Article {
         id: number;
@@ -25,52 +22,55 @@
         is_active: boolean;
     }
 
-    let currentTopic: Topic;
+    let currentTopic: string = '';
     let articles: Article[] = [];
     let loading = true;
     let error = '';
     let selectedArticle: Article | null = null;
-    let showGenerateModal = false;
-    let generateQuery = '';
-    let isGenerating = false;
+    let isCreating = false;
+    let topicsLoading = true;
 
-    // Resources for generation
-    let generateResources: Resource[] = [];
-    let resourcesLoading = false;
-
-    const topics = [
-        { id: 'macro' as Topic, label: 'Macroeconomic' },
-        { id: 'equity' as Topic, label: 'Equity' },
-        { id: 'fixed_income' as Topic, label: 'Fixed Income' },
-        { id: 'esg' as Topic, label: 'ESG' }
-    ];
-
-    const topicLabels: Record<Topic, string> = {
-        'macro': 'Macroeconomic Research',
-        'equity': 'Equity Research',
-        'fixed_income': 'Fixed Income Research',
-        'esg': 'ESG Research'
-    };
+    // Topics loaded from database
+    let dbTopics: TopicType[] = [];
 
     // Get topic from URL parameter
-    $: currentTopic = $page.params.topic as Topic;
+    $: currentTopic = $page.params.topic;
 
-    function switchTopic(topic: Topic) {
-        goto(`/analyst/${topic}`);
+    // Current topic data
+    $: currentTopicData = dbTopics.find(t => t.slug === currentTopic);
+
+    function switchTopic(topicSlug: string) {
+        goto(`/analyst/${topicSlug}`);
     }
 
-    // Check if user can access this topic - only analyst role grants access
+    // Check if user can access this topic - analyst role or global admin grants access
     function canAccessTopic(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
+        // Global admin can access all topics
+        if ($auth.user.scopes.includes('global:admin')) return true;
         return $auth.user.scopes.includes(`${topic}:analyst`);
     }
 
     // Filter topics to only show those the user has analyst access to
-    $: accessibleTopics = topics.filter(topic => canAccessTopic(topic.id));
+    $: accessibleTopics = dbTopics
+        .filter(topic => canAccessTopic(topic.slug))
+        .sort((a, b) => a.sort_order - b.sort_order);
 
     // Redirect if user doesn't have permission
-    $: if ($auth.isAuthenticated && currentTopic && !canAccessTopic(currentTopic)) {
+    $: if ($auth.isAuthenticated && currentTopic && !topicsLoading && !canAccessTopic(currentTopic)) {
         goto('/analyst');
+    }
+
+    async function loadTopicsFromDb() {
+        try {
+            topicsLoading = true;
+            dbTopics = await getTopics(); // Show all topics in role dropdown
+        } catch (e) {
+            console.error('Error loading topics:', e);
+            dbTopics = [];
+        } finally {
+            topicsLoading = false;
+        }
     }
 
     async function loadArticles() {
@@ -124,48 +124,16 @@
         goto(`/analyst/edit/${articleId}`);
     }
 
-    async function loadGenerateResources() {
+    async function handleCreateNewArticle() {
         try {
-            resourcesLoading = true;
-            // Load resources from the topic's group
-            const response = await getGroupResources(currentTopic);
-            generateResources = response.resources;
-        } catch (e) {
-            console.error('Failed to load resources:', e);
-            generateResources = [];
-        } finally {
-            resourcesLoading = false;
-        }
-    }
-
-    async function openGenerateModal() {
-        showGenerateModal = true;
-        await loadGenerateResources();
-    }
-
-    function handleResourceRefresh() {
-        loadGenerateResources();
-    }
-
-    function handleResourceError(event: CustomEvent<string>) {
-        error = event.detail;
-    }
-
-    async function handleGenerateContent() {
-        if (!generateQuery.trim()) return;
-
-        try {
-            isGenerating = true;
+            isCreating = true;
             error = '';
-            await generateContent(currentTopic, generateQuery);
-            await loadArticles();
-            showGenerateModal = false;
-            generateQuery = '';
-            generateResources = [];
+            const article = await createEmptyArticle(currentTopic);
+            // Navigate to the editor for the new article
+            goto(`/analyst/edit/${article.id}`);
         } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to generate content';
-        } finally {
-            isGenerating = false;
+            error = e instanceof Error ? e.message : 'Failed to create article';
+            isCreating = false;
         }
     }
 
@@ -187,34 +155,47 @@
     }
 
     // Load articles when topic changes
-    $: if (currentTopic) {
+    $: if (currentTopic && !topicsLoading) {
         loadArticles();
     }
 
-    onMount(() => {
+    onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
+            return;
         }
+        await loadTopicsFromDb();
     });
 </script>
 
 <div class="content-container">
-    <!-- Topic Tabs with Generate Button -->
-    <div class="tabs-container">
-        <nav class="topic-tabs">
-            {#each accessibleTopics as topic}
-                <button
-                    class="tab"
-                    class:active={currentTopic === topic.id}
-                    on:click={() => switchTopic(topic.id)}
+    <!-- Header with Topic Dropdown and Action Buttons -->
+    <div class="page-header">
+        <div class="header-left">
+            <div class="topic-selector">
+                <label for="topic-select">Topic:</label>
+                <select
+                    id="topic-select"
+                    value={currentTopic}
+                    on:change={(e) => switchTopic(e.currentTarget.value)}
+                    disabled={topicsLoading}
                 >
-                    {topic.label}
-                </button>
-            {/each}
-        </nav>
-        <button class="generate-btn" on:click={openGenerateModal}>
-            + Generate Content
-        </button>
+                    {#if topicsLoading}
+                        <option value="">Loading topics...</option>
+                    {:else}
+                        {#each accessibleTopics as topic}
+                            <option value={topic.slug}>{topic.title}</option>
+                        {/each}
+                    {/if}
+                </select>
+            </div>
+            <button class="action-btn active">Articles</button>
+        </div>
+        <div class="header-actions">
+            <button class="action-btn primary" on:click={handleCreateNewArticle} disabled={isCreating || !currentTopic}>
+                {isCreating ? 'Creating...' : '+ New Article'}
+            </button>
+        </div>
     </div>
 
     {#if error}
@@ -226,7 +207,7 @@
     {:else if articles.length === 0}
         <div class="empty-state">
             <h2>No Articles Yet</h2>
-            <p>Create your first {topicLabels[currentTopic]} article using the "Generate Content" button above.</p>
+            <p>Create your first {currentTopicData?.title || currentTopic} article using the "+ New Article" button above.</p>
         </div>
     {:else}
         <div class="articles-grid">
@@ -370,66 +351,6 @@
     </div>
 {/if}
 
-<!-- Generate Content Modal -->
-{#if showGenerateModal}
-    <div class="modal-overlay" on:click={() => { showGenerateModal = false; generateQuery = ''; generateResources = []; }}>
-        <div class="modal generate-modal" on:click|stopPropagation>
-            <div class="modal-header">
-                <h3>Generate New {topicLabels[currentTopic]} Content</h3>
-                <button class="close-btn" on:click={() => { showGenerateModal = false; generateQuery = ''; generateResources = []; }}>×</button>
-            </div>
-
-            <div class="generate-modal-body">
-                <p class="modal-description">
-                    Use the content agent to research and create a new article.
-                    You can add resources that will be used as context for generation.
-                </p>
-
-                <div class="form-group">
-                    <label for="generate-query">Topic / Question</label>
-                    <textarea
-                        id="generate-query"
-                        bind:value={generateQuery}
-                        placeholder="Example: Impact of rising interest rates on tech stocks"
-                        rows="3"
-                        disabled={isGenerating}
-                    ></textarea>
-                </div>
-
-                <!-- Resources Section -->
-                <div class="resources-section">
-                    <h4>Resources</h4>
-                    <p class="resources-hint">Upload or paste resources to use as context for content generation. These will be added to the {currentTopic} shared resources.</p>
-                    <ResourceEditor
-                        resources={generateResources}
-                        groupName="{currentTopic}:admin"
-                        loading={resourcesLoading}
-                        showDeleteButton={true}
-                        showUnlinkButton={false}
-                        on:refresh={handleResourceRefresh}
-                        on:error={handleResourceError}
-                    />
-                </div>
-
-                {#if isGenerating}
-                    <div class="generating-indicator">
-                        <div class="spinner"></div>
-                        <p>Researching and generating content... This may take a minute.</p>
-                    </div>
-                {/if}
-            </div>
-
-            <div class="modal-actions">
-                <button on:click={handleGenerateContent} disabled={!generateQuery.trim() || isGenerating}>
-                    {isGenerating ? 'Generating...' : 'Generate Article'}
-                </button>
-                <button on:click={() => { showGenerateModal = false; generateQuery = ''; generateResources = []; }} disabled={isGenerating}>
-                    Cancel
-                </button>
-            </div>
-        </div>
-    </div>
-{/if}
 
 <style>
     :global(body) {
@@ -437,7 +358,7 @@
     }
 
     .content-container {
-        max-width: 1200px;
+        max-width: 1600px;
         margin: 0 auto;
         background: white;
         min-height: 100vh;
@@ -460,25 +381,72 @@
         align-items: center;
     }
 
-    /* Topic Tabs Container */
-    .tabs-container {
+    /* Page Header - Unified Design */
+    .page-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         background: white;
         border-bottom: 1px solid #e5e7eb;
-        margin-bottom: 2rem;
+        padding: 0.75rem 1rem;
+        gap: 1rem;
     }
 
-    .topic-tabs {
+    .header-left {
         display: flex;
+        align-items: center;
+        gap: 0.75rem;
     }
 
-    .tab {
-        padding: 1rem 1.5rem;
-        background: none;
-        border: none;
-        border-bottom: 2px solid transparent;
+    .header-actions {
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .topic-selector {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .topic-selector label {
+        font-weight: 500;
+        color: #374151;
+        font-size: 0.875rem;
+    }
+
+    .topic-selector select {
+        padding: 0.5rem 2rem 0.5rem 0.75rem;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: #1f2937;
+        background: white;
+        cursor: pointer;
+        appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.5rem center;
+        background-size: 1rem;
+        min-width: 150px;
+    }
+
+    .topic-selector select:hover {
+        border-color: #3b82f6;
+    }
+
+    .topic-selector select:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+
+    .action-btn {
+        padding: 0.5rem 1rem;
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        border-radius: 4px;
         cursor: pointer;
         font-size: 0.875rem;
         font-weight: 500;
@@ -486,14 +454,31 @@
         transition: all 0.2s;
     }
 
-    .tab:hover {
+    .action-btn:hover {
+        background: #e5e7eb;
         color: #1a1a1a;
-        background: #f9fafb;
     }
 
-    .tab.active {
-        color: #3b82f6;
-        border-bottom-color: #3b82f6;
+    .action-btn.active {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
+    }
+
+    .action-btn.primary {
+        background: #3b82f6;
+        color: white;
+        border-color: #3b82f6;
+    }
+
+    .action-btn.primary:hover:not(:disabled) {
+        background: #2563eb;
+    }
+
+    .action-btn:disabled {
+        background: #e5e7eb;
+        color: #9ca3af;
+        cursor: not-allowed;
     }
 
     header h1 {

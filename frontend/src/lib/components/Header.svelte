@@ -1,8 +1,9 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getUserProfile, deleteUserAccount } from '$lib/api';
+    import { getUserProfile, deleteUserAccount, getTopics, type Topic as TopicType } from '$lib/api';
     import { goto } from '$app/navigation';
     import { page } from '$app/stores';
+    import { onMount } from 'svelte';
 
     interface UserProfile {
         id: number;
@@ -15,14 +16,44 @@
         groups: string[];
     }
 
-    type Topic = 'macro' | 'equity' | 'fixed_income' | 'esg';
+    // Topics loaded from database
+    let dbTopics: TopicType[] = [];
+    let topicsLoading = false;
+    let topicsLoadedForUser: string | null = null; // Track which user we loaded topics for
 
-    const topics: { id: Topic; label: string }[] = [
-        { id: 'macro', label: 'Macro' },
-        { id: 'equity', label: 'Equities' },
-        { id: 'fixed_income', label: 'Fixed Income' },
-        { id: 'esg', label: 'ESG' }
-    ];
+    // Map database topics to the format used by navigation
+    $: topics = dbTopics
+        .filter(t => t.visible && t.active)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map(t => ({ id: t.slug, label: t.title }));
+
+    async function loadTopics() {
+        if (topicsLoading) return; // Prevent concurrent loads
+        try {
+            topicsLoading = true;
+            dbTopics = await getTopics(true, true); // active_only, visible_only
+            topicsLoadedForUser = $auth.user?.email || 'authenticated';
+        } catch (e) {
+            console.error('Error loading topics:', e);
+            dbTopics = [];
+            topicsLoadedForUser = null; // Allow retry on error
+        } finally {
+            topicsLoading = false;
+        }
+    }
+
+    // Load topics when auth state changes to authenticated
+    // Use reactive statement to watch $auth.isAuthenticated
+    $: {
+        const currentUser = $auth.user?.email || ($auth.isAuthenticated ? 'authenticated' : null);
+        if ($auth.isAuthenticated && currentUser !== topicsLoadedForUser && !topicsLoading) {
+            loadTopics();
+        } else if (!$auth.isAuthenticated) {
+            // Clear topics when user logs out
+            dbTopics = [];
+            topicsLoadedForUser = null;
+        }
+    }
 
     // Check user access to topics
     function hasTopicAccess(topic: string): boolean {
@@ -47,8 +78,8 @@
     // Extract scopes for reactivity - this ensures Svelte tracks $auth.user.scopes as a dependency
     $: userScopes = $auth.user?.scopes || [];
 
-    // Get topics user has access to (explicitly depend on userScopes for reactivity)
-    $: accessibleTopics = (userScopes, topics.filter(t => hasTopicAccess(t.id)));
+    // Show all visible topics in navigation (already filtered to visible/active)
+    $: accessibleTopics = topics;
 
     // Check if user has any analyst/editor access
     $: hasAnyAnalystAccess = (userScopes, topics.some(t => hasAnalystAccess(t.id)));

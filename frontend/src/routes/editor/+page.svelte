@@ -2,27 +2,37 @@
     import { auth } from '$lib/stores/auth';
     import { goto } from '$app/navigation';
     import { onMount } from 'svelte';
-
-    const allTopics = ['macro', 'equity', 'fixed_income', 'esg'];
+    import { getTopics } from '$lib/api';
 
     function hasEditorAccess(topic: string, scopes: string[]): boolean {
         if (!scopes.length) return false;
-        // Only show for users with explicit editor role for that topic
+        // Global admin can access all topics
+        if (scopes.includes('global:admin')) return true;
+        // Or users with explicit editor role for that topic
         return scopes.includes(`${topic}:editor`);
     }
 
-    onMount(() => {
+    onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
             return;
         }
 
-        const scopes = $auth.user?.scopes || [];
-        const firstTopic = allTopics.find(topic => hasEditorAccess(topic, scopes));
-        if (firstTopic) {
-            goto(`/editor/${firstTopic}`);
-        } else {
-            // User has no editor access to any topic
+        try {
+            // Load topics from database
+            const dbTopics = await getTopics(); // Show all topics
+            const sortedTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
+
+            const scopes = $auth.user?.scopes || [];
+            const firstTopic = sortedTopics.find(topic => hasEditorAccess(topic.slug, scopes));
+            if (firstTopic) {
+                goto(`/editor/${firstTopic.slug}`);
+            } else {
+                // User has no editor access to any topic
+                goto('/');
+            }
+        } catch (e) {
+            console.error('Error loading topics:', e);
             goto('/');
         }
     });

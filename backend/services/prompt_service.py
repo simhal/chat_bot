@@ -318,6 +318,77 @@ Format articles with a clear headline and structured content."""
             PromptService._get_main_chat_template_cached.cache_clear()
             PromptService._get_content_agent_template_cached.cache_clear()
 
+    @staticmethod
+    def get_prompt_modules(db: Session, prompt_type: Optional[str] = None, prompt_group: Optional[str] = None) -> list:
+        """
+        Get prompt modules from database.
+
+        Args:
+            db: Database session
+            prompt_type: Filter by prompt type
+            prompt_group: Filter by prompt group
+
+        Returns:
+            List of prompt module dicts
+        """
+        from models import PromptModule
+
+        query = db.query(PromptModule)
+
+        if prompt_type:
+            query = query.filter(PromptModule.prompt_type == prompt_type)
+        if prompt_group:
+            query = query.filter(PromptModule.prompt_group == prompt_group)
+
+        modules = query.order_by(PromptModule.sort_order, PromptModule.name).all()
+
+        return [
+            {
+                'id': m.id,
+                'name': m.name,
+                'prompt_type': m.prompt_type.value if hasattr(m.prompt_type, 'value') else m.prompt_type,
+                'prompt_group': m.prompt_group,
+                'template_text': m.template_text,
+                'description': m.description,
+                'is_default': m.is_default,
+                'sort_order': m.sort_order,
+                'is_active': m.is_active,
+                'version': m.version,
+                'created_at': m.created_at.isoformat() if m.created_at else None,
+                'updated_at': m.updated_at.isoformat() if m.updated_at else None
+            }
+            for m in modules
+        ]
+
+    @staticmethod
+    def get_available_tonalities(db: Session) -> list:
+        """
+        Get available tonality options for user selection.
+
+        Args:
+            db: Database session
+
+        Returns:
+            List of tonality option dicts
+        """
+        from models import PromptModule, PromptType
+
+        tonalities = db.query(PromptModule).filter(
+            PromptModule.prompt_type == PromptType.TONALITY,
+            PromptModule.is_active == True
+        ).order_by(PromptModule.sort_order, PromptModule.name).all()
+
+        return [
+            {
+                'id': t.id,
+                'name': t.name,
+                'description': t.description,
+                'prompt_group': t.prompt_group,
+                'is_default': t.is_default
+            }
+            for t in tonalities
+        ]
+
 
 class PromptValidator:
     """Validate prompt templates before saving."""

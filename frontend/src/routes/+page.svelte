@@ -1,13 +1,14 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { sendChatMessage, getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle } from '$lib/api';
+    import { sendChatMessage, getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle, getTopics, getArticlePublicationResources, getPublishedArticleHtmlUrl, getPublishedArticlePdfUrl, type Topic as TopicType, type ArticlePublicationResources } from '$lib/api';
     import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI } from '$env/static/public';
     import Markdown from '$lib/components/Markdown.svelte';
     import { onMount, tick } from 'svelte';
     import { browser } from '$app/environment';
     import { page } from '$app/stores';
 
-    type Tab = 'chat' | 'search' | 'macro' | 'equity' | 'fixed_income' | 'esg';
+    // Tab is now dynamic - 'chat', 'search', or any topic slug
+    type Tab = string;
 
     interface Article {
         id: number;
@@ -34,6 +35,7 @@
     let articles: Article[] = [];
     let articlesLoading = false;
     let selectedArticle: Article | null = null;
+    let selectedArticleResources: ArticlePublicationResources | null = null;
     let showRatingModal = false;
     let userRating = 0;
 
@@ -41,7 +43,7 @@
     let searchResults: Article[] = [];
     let searchLoading = false;
     let searchParams = {
-        topic: 'all' as 'all' | 'macro' | 'equity' | 'fixed_income' | 'esg',
+        topic: 'all' as string,
         q: '',
         headline: '',
         keywords: '',
@@ -51,7 +53,39 @@
         limit: 10
     };
 
-    const validTabs: Tab[] = ['chat', 'search', 'macro', 'equity', 'fixed_income', 'esg'];
+    // Topics loaded from database
+    let dbTopics: TopicType[] = [];
+    let topicsLoading = false;
+    let topicsLoadedForUser: string | null = null; // Track which user we loaded topics for
+
+    // Dynamic valid tabs based on loaded topics
+    $: validTabs = ['chat', 'search', ...dbTopics.filter(t => t.visible && t.active).map(t => t.slug)];
+
+    async function loadTopicsFromDb() {
+        if (topicsLoading) return; // Prevent concurrent loads
+        try {
+            topicsLoading = true;
+            dbTopics = await getTopics(true, true); // active_only, visible_only
+            topicsLoadedForUser = $auth.user?.email || 'authenticated';
+        } catch (e) {
+            console.error('Error loading topics:', e);
+            dbTopics = [];
+            topicsLoadedForUser = null; // Allow retry on error
+        } finally {
+            topicsLoading = false;
+        }
+    }
+
+    // Load topics when auth state changes to authenticated
+    $: {
+        const currentUser = $auth.user?.email || ($auth.isAuthenticated ? 'authenticated' : null);
+        if ($auth.isAuthenticated && currentUser !== topicsLoadedForUser && !topicsLoading) {
+            loadTopicsFromDb();
+        } else if (!$auth.isAuthenticated) {
+            dbTopics = [];
+            topicsLoadedForUser = null;
+        }
+    }
 
     function initiateLinkedInLogin() {
         const state = Math.random().toString(36).substring(7);
@@ -112,6 +146,14 @@
         try {
             // Fetch full article to increment readership
             selectedArticle = await getArticle(article.id);
+
+            // Fetch publication resources for published articles
+            try {
+                selectedArticleResources = await getArticlePublicationResources(article.id);
+            } catch (e) {
+                // May not have resources yet (older articles) - that's OK
+                selectedArticleResources = null;
+            }
         } catch (e) {
             console.error('Error loading article:', e);
         }
@@ -120,6 +162,7 @@
     function handleTabChange(tab: Tab) {
         currentTab = tab;
         selectedArticle = null;
+        selectedArticleResources = null;
 
         // Load articles for the selected topic (but not for chat or search)
         if (tab !== 'chat' && tab !== 'search') {
@@ -254,7 +297,7 @@
     }
 
     // React to URL changes
-    $: if (browser && $auth.isAuthenticated && $page.url) {
+    $: if (browser && $auth.isAuthenticated && $page.url && !topicsLoading) {
         handleDeepLink();
     }
 
@@ -385,10 +428,9 @@
                                     <label for="search-topic">Topic</label>
                                     <select id="search-topic" bind:value={searchParams.topic}>
                                         <option value="all">All Topics</option>
-                                        <option value="macro">Macroeconomic</option>
-                                        <option value="equity">Equity</option>
-                                        <option value="fixed_income">Fixed Income</option>
-                                        <option value="esg">ESG</option>
+                                        {#each dbTopics.filter(t => t.visible && t.active).sort((a, b) => a.sort_order - b.sort_order) as topic}
+                                            <option value={topic.slug}>{topic.title}</option>
+                                        {/each}
                                     </select>
                                 </div>
 
@@ -562,19 +604,30 @@
 
 <!-- View Article Modal -->
 {#if selectedArticle && !showRatingModal}
-    <div class="modal-overlay" on:click={() => selectedArticle = null}>
+    <div class="modal-overlay" on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>
         <div class="modal large" on:click|stopPropagation>
             <!-- Fixed Header with Buttons -->
             <div class="modal-header-fixed">
                 <div class="modal-header">
                     <h2>{selectedArticle.headline}</h2>
-                    <button class="close-btn" on:click={() => selectedArticle = null}>×</button>
+                    <button class="close-btn" on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>×</button>
                 </div>
                 <div class="modal-actions-fixed">
-                    <button on:click={() => selectedArticle = null}>← Back to Articles</button>
-                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
-                        Download PDF
-                    </button>
+                    <button on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>← Back to Articles</button>
+                    {#if selectedArticleResources?.hash_ids?.html}
+                        <a href={getPublishedArticleHtmlUrl(selectedArticleResources.hash_ids.html)} target="_blank" class="view-html-btn">
+                            View as HTML
+                        </a>
+                    {/if}
+                    {#if selectedArticleResources?.hash_ids?.pdf}
+                        <a href={getPublishedArticlePdfUrl(selectedArticleResources.hash_ids.pdf)} download class="download-pdf-btn">
+                            Download PDF
+                        </a>
+                    {:else}
+                        <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
+                            Download PDF
+                        </button>
+                    {/if}
                     <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
                         Rate Article
                     </button>
@@ -955,10 +1008,33 @@
         background: #10b981;
         color: white;
         border: none;
+        text-decoration: none;
+        display: inline-block;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
     }
 
     .download-pdf-btn:hover {
         background: #059669;
+    }
+
+    .view-html-btn {
+        padding: 0.5rem 1rem;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        text-decoration: none;
+        display: inline-block;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+    }
+
+    .view-html-btn:hover {
+        background: #2563eb;
     }
 
     article h1 {
@@ -1184,11 +1260,22 @@
     }
 
     .modal-actions-fixed .download-pdf-btn {
-        background: #3b82f6;
+        background: #10b981;
         color: white;
+        text-decoration: none;
     }
 
     .modal-actions-fixed .download-pdf-btn:hover {
+        background: #059669;
+    }
+
+    .modal-actions-fixed .view-html-btn {
+        background: #3b82f6;
+        color: white;
+        text-decoration: none;
+    }
+
+    .modal-actions-fixed .view-html-btn:hover {
         background: #2563eb;
     }
 
