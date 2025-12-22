@@ -614,50 +614,48 @@
                 </div>
                 <div class="modal-actions-fixed">
                     <button on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>← Back to Articles</button>
-                    {#if selectedArticleResources?.hash_ids?.html}
-                        <a href={getPublishedArticleHtmlUrl(selectedArticleResources.hash_ids.html)} target="_blank" class="view-html-btn">
-                            View as HTML
-                        </a>
-                    {/if}
-                    {#if selectedArticleResources?.hash_ids?.pdf}
-                        <a href={getPublishedArticlePdfUrl(selectedArticleResources.hash_ids.pdf)} download class="download-pdf-btn">
-                            Download PDF
-                        </a>
-                    {:else}
-                        <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
-                            Download PDF
-                        </button>
-                    {/if}
+                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
+                        Download PDF
+                    </button>
                     <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
                         Rate Article
                     </button>
                 </div>
             </div>
 
-            <!-- Scrollable Content -->
-            <div class="modal-content-scrollable">
-                <div class="modal-meta">
-                    <span><strong>Published:</strong> {formatDate(selectedArticle.created_at)}</span>
-                    <span><strong>Readership:</strong> {selectedArticle.readership_count}</span>
-                    {#if selectedArticle.rating}
-                        <span><strong>Rating:</strong> {selectedArticle.rating}/5 ({selectedArticle.rating_count} ratings)</span>
-                    {/if}
-                    {#if selectedArticle.author}
-                        <span><strong>Author:</strong> {selectedArticle.author}</span>
-                    {/if}
-                    {#if selectedArticle.editor}
-                        <span><strong>Editor:</strong> {selectedArticle.editor}</span>
-                    {/if}
-                </div>
-                {#if selectedArticle.keywords}
-                    <div class="modal-keywords">
-                        <strong>Keywords:</strong> {selectedArticle.keywords}
+            <!-- Content: HTML iframe or markdown fallback -->
+            {#if selectedArticleResources?.hash_ids?.html}
+                <iframe
+                    src={getPublishedArticleHtmlUrl(selectedArticleResources.hash_ids.html)}
+                    title={selectedArticle.headline}
+                    class="article-html-iframe"
+                ></iframe>
+            {:else}
+                <!-- Fallback to markdown for articles without HTML resource -->
+                <div class="modal-content-scrollable">
+                    <div class="modal-meta">
+                        <span><strong>Published:</strong> {formatDate(selectedArticle.created_at)}</span>
+                        <span><strong>Readership:</strong> {selectedArticle.readership_count}</span>
+                        {#if selectedArticle.rating}
+                            <span><strong>Rating:</strong> {selectedArticle.rating}/5 ({selectedArticle.rating_count} ratings)</span>
+                        {/if}
+                        {#if selectedArticle.author}
+                            <span><strong>Author:</strong> {selectedArticle.author}</span>
+                        {/if}
+                        {#if selectedArticle.editor}
+                            <span><strong>Editor:</strong> {selectedArticle.editor}</span>
+                        {/if}
                     </div>
-                {/if}
-                <div class="modal-content">
-                    <Markdown content={selectedArticle.content} />
+                    {#if selectedArticle.keywords}
+                        <div class="modal-keywords">
+                            <strong>Keywords:</strong> {selectedArticle.keywords}
+                        </div>
+                    {/if}
+                    <div class="modal-content">
+                        <Markdown content={selectedArticle.content} />
+                    </div>
                 </div>
-            </div>
+            {/if}
         </div>
     </div>
 {/if}
@@ -1203,7 +1201,8 @@
 
     .modal.large {
         min-width: 600px;
-        max-width: 900px;
+        max-width: 1000px;
+        width: 80vw;
         display: flex;
         flex-direction: column;
         padding: 0;
@@ -1293,6 +1292,14 @@
         flex: 1;
         overflow-y: auto;
         padding: 2rem;
+    }
+
+    .article-html-iframe {
+        flex: 1;
+        width: 100%;
+        min-height: 70vh;
+        border: none;
+        background: white;
     }
 
     .close-btn {

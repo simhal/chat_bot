@@ -6,6 +6,15 @@
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
 
+    // Shared localStorage key for topic persistence across analyst, editor, admin
+    const SELECTED_TOPIC_KEY = 'selected_topic';
+
+    function saveSelectedTopic(topic: string) {
+        if (typeof localStorage !== 'undefined' && topic) {
+            localStorage.setItem(SELECTED_TOPIC_KEY, topic);
+        }
+    }
+
     interface Article {
         id: number;
         topic: string;
@@ -35,6 +44,9 @@
 
     // Get topic from URL parameter
     $: currentTopic = $page.params.topic;
+
+    // Save topic to localStorage when it changes
+    $: if (currentTopic) saveSelectedTopic(currentTopic);
 
     // Current topic data
     $: currentTopicData = dbTopics.find(t => t.slug === currentTopic);
@@ -386,16 +398,16 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
+        padding: 1rem 1.5rem;
         background: white;
         border-bottom: 1px solid #e5e7eb;
-        padding: 0.75rem 1rem;
-        gap: 1rem;
+        margin-bottom: 2rem;
     }
 
     .header-left {
         display: flex;
         align-items: center;
-        gap: 0.75rem;
+        gap: 1rem;
     }
 
     .header-actions {
@@ -406,7 +418,7 @@
     .topic-selector {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.75rem;
     }
 
     .topic-selector label {

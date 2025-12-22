@@ -1,14 +1,7 @@
-"""Service for generating PDF documents from articles."""
+"""Service for generating PDF documents from articles using weasyprint."""
 
 from io import BytesIO
-from typing import Optional, List, Tuple, Any
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image, Table, TableStyle
-from reportlab.lib.colors import HexColor
-from reportlab.lib import colors
+from typing import Optional
 import markdown2
 from datetime import datetime
 import re
@@ -22,31 +15,27 @@ class PDFService:
     """Service for generating PDF documents from articles."""
 
     @staticmethod
-    def _get_table_image_data(db, hash_id: str) -> Optional[bytes]:
+    def _get_table_image_url(db, hash_id: str, base_url: str) -> Optional[str]:
         """
-        Get the image child resource data for a table.
+        Get the image child resource URL for a table.
 
         Args:
             db: Database session
             hash_id: Hash ID of the table resource
+            base_url: Base URL for content
 
         Returns:
-            Image bytes or None if not found
+            Image URL or None if not found
         """
         from models import Resource, ResourceType
-        from services.storage_service import get_storage
 
         if not db:
-            logger.warning("No db session provided for _get_table_image_data")
             return None
 
         # Find the table resource
         table_resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
         if not table_resource:
-            logger.warning(f"Table resource not found: {hash_id}")
             return None
-
-        logger.info(f"Found table resource id={table_resource.id}")
 
         # Find the IMAGE child resource
         image_child = db.query(Resource).filter(
@@ -55,32 +44,17 @@ class PDFService:
             Resource.is_active == True
         ).first()
 
-        if not image_child:
-            logger.warning(f"No IMAGE child for table {table_resource.id}")
-            return None
-
-        if not image_child.file_resource:
-            logger.warning(f"IMAGE child {image_child.id} has no file_resource")
-            return None
-
-        logger.info(f"Found image child: id={image_child.id}, path={image_child.file_resource.file_path}")
-
-        # Get the image data from storage
-        storage = get_storage()
-        try:
-            data = storage.get_file(image_child.file_resource.file_path)
-            logger.info(f"Retrieved {len(data) if data else 0} bytes from storage")
-            return data
-        except Exception as e:
-            logger.error(f"Failed to get table image: {e}")
-            return None
+        if image_child:
+            return f"{base_url}/api/resources/content/{image_child.hash_id}"
+        return None
 
     @staticmethod
-    def process_resource_links_for_pdf(content: str, base_url: str = "", db=None) -> Tuple[str, List[dict]]:
+    def process_resource_links(content: str, base_url: str = "", db=None) -> str:
         """
         Process [name](resource:hash_id) links for PDF output.
 
-        Replaces resource links with placeholders and returns info about embedded resources.
+        Converts resource links to actual URLs, and handles tables specially
+        by embedding their image representation.
 
         Args:
             content: Markdown content with resource links
@@ -88,14 +62,10 @@ class PDFService:
             db: Optional database session for looking up resource types
 
         Returns:
-            Tuple of (processed content with placeholders, list of resource info dicts)
+            Processed markdown content
         """
-        from models import Resource, ResourceType
+        from models import Resource
 
-        resources_to_embed = []
-        placeholder_counter = [0]  # Use list to allow mutation in closure
-
-        # Pattern: [name](resource:hash_id)
         pattern = r'\[([^\]]+)\]\(resource:([a-zA-Z0-9]+)\)'
 
         def replace_resource(match):
@@ -105,68 +75,24 @@ class PDFService:
 
             # Check resource type
             resource_type = None
-            resource_id = None
             if db:
                 resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
                 if resource:
                     resource_type = resource.resource_type.value if resource.resource_type else None
-                    resource_id = resource.id
 
             if resource_type == 'table':
-                # Get table image data
-                logger.info(f"Processing table resource: {hash_id}")
-                image_data = PDFService._get_table_image_data(db, hash_id)
-                if image_data:
-                    logger.info(f"Found image data for table {hash_id}: {len(image_data)} bytes")
-                    placeholder = f"[[EMBED_TABLE_IMAGE_{placeholder_counter[0]}]]"
-                    resources_to_embed.append({
-                        'type': 'table_image',
-                        'placeholder': placeholder,
-                        'name': name,
-                        'hash_id': hash_id,
-                        'image_data': image_data
-                    })
-                    placeholder_counter[0] += 1
-                    return f"\n{placeholder}\n"
+                # Try to get table image URL
+                image_url = PDFService._get_table_image_url(db, hash_id, base_url)
+                if image_url:
+                    return f'\n\n**{name}**\n\n![{name}]({image_url})\n\n'
                 else:
-                    logger.warning(f"No image data found for table {hash_id}")
-                    # Fallback if no image available
-                    return f"\n[Table: {name}] (View at: {content_url})\n"
-
+                    return f'[{name}]({content_url})'
             elif resource_type == 'image':
-                return f"[Image: {name}] ({content_url})"
+                return f'![{name}]({content_url})'
             else:
-                return f"{name} ({content_url})"
+                return f'[{name}]({content_url})'
 
-        processed_content = re.sub(pattern, replace_resource, content)
-        return processed_content, resources_to_embed
-
-    @staticmethod
-    def convert_markdown_to_plaintext(markdown_text: str) -> str:
-        """
-        Convert Markdown to plain text with some formatting preserved.
-
-        Args:
-            markdown_text: Markdown formatted text
-
-        Returns:
-            Plain text with basic formatting
-        """
-        # Convert markdown to HTML first
-        html = markdown2.markdown(markdown_text)
-
-        # Remove HTML tags but preserve line breaks
-        text = re.sub(r'<br\s*/?>', '\n', html)
-        text = re.sub(r'<p>', '', text)
-        text = re.sub(r'</p>', '\n\n', text)
-        text = re.sub(r'<h[1-6]>', '\n', text)
-        text = re.sub(r'</h[1-6]>', '\n\n', text)
-        text = re.sub(r'<[^>]+>', '', text)
-
-        # Clean up multiple newlines
-        text = re.sub(r'\n{3,}', '\n\n', text)
-
-        return text.strip()
+        return re.sub(pattern, replace_resource, content)
 
     @staticmethod
     def generate_article_pdf(
@@ -182,7 +108,7 @@ class PDFService:
         db=None
     ) -> BytesIO:
         """
-        Generate a PDF document for an article.
+        Generate a PDF document for an article using weasyprint.
 
         Args:
             headline: Article headline
@@ -199,199 +125,251 @@ class PDFService:
         Returns:
             BytesIO object containing the PDF
         """
-        # Process resource links and get embedded resources
-        resources_to_embed = []
+        from weasyprint import HTML, CSS
+
+        # Get base URL
+        if not base_url:
+            base_url = os.environ.get("API_BASE_URL", "")
+
+        # Process resource links
         if base_url:
-            content, resources_to_embed = PDFService.process_resource_links_for_pdf(content, base_url, db)
-        else:
-            env_base_url = os.environ.get("API_BASE_URL", "")
-            if env_base_url:
-                content, resources_to_embed = PDFService.process_resource_links_for_pdf(content, env_base_url, db)
+            content = PDFService.process_resource_links(content, base_url, db)
 
-        # Create lookup dict for embedded resources
-        embed_lookup = {r['placeholder']: r for r in resources_to_embed}
-
-        # Create a BytesIO buffer to hold the PDF
-        buffer = BytesIO()
-
-        # Create the PDF document
-        doc = SimpleDocTemplate(
-            buffer,
-            pagesize=letter,
-            rightMargin=72,
-            leftMargin=72,
-            topMargin=72,
-            bottomMargin=18,
+        # Convert markdown to HTML
+        html_content = markdown2.markdown(
+            content,
+            extras=['fenced-code-blocks', 'tables', 'code-friendly', 'cuddled-lists']
         )
 
-        # Container for the 'Flowable' objects
-        elements = []
-
-        # Define styles
-        styles = getSampleStyleSheet()
-
-        # Custom styles
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor=HexColor('#1a1a1a'),
-            spaceAfter=12,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        )
-
-        topic_style = ParagraphStyle(
-            'TopicStyle',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=HexColor('#3b82f6'),
-            spaceAfter=6,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        )
-
-        meta_style = ParagraphStyle(
-            'MetaStyle',
-            parent=styles['Normal'],
-            fontSize=9,
-            textColor=HexColor('#6b7280'),
-            spaceAfter=6,
-            alignment=TA_CENTER,
-            fontName='Helvetica'
-        )
-
-        body_style = ParagraphStyle(
-            'CustomBody',
-            parent=styles['BodyText'],
-            fontSize=11,
-            textColor=HexColor('#1a1a1a'),
-            spaceAfter=12,
-            alignment=TA_JUSTIFY,
-            leading=16,
-            fontName='Helvetica'
-        )
-
-        keywords_style = ParagraphStyle(
-            'KeywordsStyle',
-            parent=styles['Normal'],
-            fontSize=9,
-            textColor=HexColor('#374151'),
-            spaceAfter=12,
-            fontName='Helvetica-Oblique'
-        )
-
-        # Add topic badge
+        # Format metadata
         topic_display = topic.replace('_', ' ').title()
-        elements.append(Paragraph(f"{topic_display} Research", topic_style))
-        elements.append(Spacer(1, 6))
-
-        # Add title
-        elements.append(Paragraph(headline, title_style))
-        elements.append(Spacer(1, 12))
-
-        # Add metadata
         try:
             created_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
             date_str = created_date.strftime('%B %d, %Y')
         except:
             date_str = created_at
 
-        elements.append(Paragraph(f"Published: {date_str}", meta_style))
-
-        # Add rating and readership if available
-        meta_info = []
+        meta_parts = [f"Published: {date_str}"]
         if rating is not None:
-            meta_info.append(f"Rating: {rating}/5 ({rating_count} ratings)")
+            meta_parts.append(f"Rating: {rating}/5 ({rating_count} ratings)")
         if readership_count > 0:
-            meta_info.append(f"Readership: {readership_count}")
+            meta_parts.append(f"Readership: {readership_count}")
+        meta_info = " | ".join(meta_parts)
 
-        if meta_info:
-            elements.append(Paragraph(" | ".join(meta_info), meta_style))
+        keywords_html = f'<p class="keywords"><strong>Keywords:</strong> {keywords}</p>' if keywords else ''
 
-        elements.append(Spacer(1, 6))
+        # Build complete HTML document with CSS
+        full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{headline}</title>
+</head>
+<body>
+    <header>
+        <div class="topic">{topic_display} Research</div>
+        <h1>{headline}</h1>
+        <div class="meta">{meta_info}</div>
+        {keywords_html}
+    </header>
+    <main>
+        {html_content}
+    </main>
+    <footer>
+        Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+    </footer>
+</body>
+</html>"""
 
-        # Add keywords if available
-        if keywords:
-            elements.append(Paragraph(f"<b>Keywords:</b> {keywords}", keywords_style))
+        # CSS styling
+        css = CSS(string="""
+            @page {
+                size: letter;
+                margin: 1in 1in 0.5in 1in;
+                @bottom-center {
+                    content: counter(page);
+                    font-size: 9pt;
+                    color: #6b7280;
+                }
+            }
 
-        elements.append(Spacer(1, 18))
+            body {
+                font-family: 'Helvetica', 'Arial', sans-serif;
+                font-size: 11pt;
+                line-height: 1.6;
+                color: #1a1a1a;
+            }
 
-        # Convert markdown content to plain text
-        plain_content = PDFService.convert_markdown_to_plaintext(content)
+            header {
+                text-align: center;
+                margin-bottom: 24pt;
+                border-bottom: 1px solid #e5e7eb;
+                padding-bottom: 18pt;
+            }
 
-        # Style for table captions
-        caption_style = ParagraphStyle(
-            'CaptionStyle',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=HexColor('#374151'),
-            spaceAfter=6,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        )
+            .topic {
+                font-size: 10pt;
+                font-weight: bold;
+                color: #3b82f6;
+                margin-bottom: 6pt;
+            }
 
-        # Split content into paragraphs and add to PDF
-        paragraphs = plain_content.split('\n\n')
-        for para in paragraphs:
-            if para.strip():
-                # Check if this paragraph contains an embedded image placeholder
-                placeholder_match = re.search(r'\[\[EMBED_TABLE_IMAGE_\d+\]\]', para)
-                if placeholder_match:
-                    placeholder = placeholder_match.group(0)
-                    if placeholder in embed_lookup:
-                        resource_info = embed_lookup[placeholder]
-                        # Add table caption
-                        elements.append(Paragraph(f"📊 {resource_info['name']}", caption_style))
-                        elements.append(Spacer(1, 6))
+            h1 {
+                font-size: 18pt;
+                font-weight: bold;
+                margin: 12pt 0;
+                color: #1a1a1a;
+            }
 
-                        # Create image from bytes
-                        try:
-                            img_buffer = BytesIO(resource_info['image_data'])
-                            img = Image(img_buffer)
+            .meta {
+                font-size: 9pt;
+                color: #6b7280;
+                margin-bottom: 6pt;
+            }
 
-                            # Scale image to fit page width (max 6 inches)
-                            max_width = 6 * inch
-                            if img.drawWidth > max_width:
-                                scale = max_width / img.drawWidth
-                                img.drawWidth = max_width
-                                img.drawHeight = img.drawHeight * scale
+            .keywords {
+                font-size: 9pt;
+                color: #374151;
+                font-style: italic;
+            }
 
-                            elements.append(img)
-                            elements.append(Spacer(1, 12))
-                        except Exception as e:
-                            logger.error(f"Failed to embed table image: {e}")
-                            # Fallback to text
-                            elements.append(Paragraph(
-                                f"[Table: {resource_info['name']}]",
-                                body_style
-                            ))
-                            elements.append(Spacer(1, 12))
-                    continue
+            main {
+                text-align: justify;
+            }
 
-                # Regular paragraph - escape special characters for ReportLab
-                para_text = para.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                elements.append(Paragraph(para_text, body_style))
-                elements.append(Spacer(1, 12))
+            h2 {
+                font-size: 14pt;
+                font-weight: bold;
+                margin: 18pt 0 9pt 0;
+                color: #1a1a1a;
+            }
 
-        # Add footer with generation info
-        elements.append(Spacer(1, 24))
-        footer_style = ParagraphStyle(
-            'FooterStyle',
-            parent=styles['Normal'],
-            fontSize=8,
-            textColor=HexColor('#9ca3af'),
-            alignment=TA_CENTER,
-            fontName='Helvetica-Oblique'
-        )
-        elements.append(Paragraph(
-            f"Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
-            footer_style
-        ))
+            h3 {
+                font-size: 12pt;
+                font-weight: bold;
+                margin: 14pt 0 7pt 0;
+                color: #1a1a1a;
+            }
 
-        # Build the PDF
-        doc.build(elements)
+            h4, h5, h6 {
+                font-size: 11pt;
+                font-weight: bold;
+                margin: 12pt 0 6pt 0;
+                color: #1a1a1a;
+            }
 
-        # Get the value of the BytesIO buffer
+            p {
+                margin: 6pt 0 12pt 0;
+            }
+
+            a {
+                color: #3b82f6;
+                text-decoration: none;
+            }
+
+            ul, ol {
+                margin: 6pt 0 12pt 24pt;
+                padding: 0;
+            }
+
+            li {
+                margin: 3pt 0;
+            }
+
+            /* Code blocks */
+            pre {
+                background: #f6f8fa;
+                border: 1px solid #e5e7eb;
+                border-radius: 4pt;
+                padding: 12pt;
+                margin: 12pt 0;
+                overflow-x: auto;
+                font-family: 'Courier New', Courier, monospace;
+                font-size: 9pt;
+                line-height: 1.4;
+            }
+
+            code {
+                font-family: 'Courier New', Courier, monospace;
+                font-size: 9pt;
+                background: #f3f4f6;
+                padding: 1pt 4pt;
+                border-radius: 2pt;
+            }
+
+            pre code {
+                background: none;
+                padding: 0;
+            }
+
+            /* Tables */
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 12pt 0;
+                font-size: 9pt;
+            }
+
+            th, td {
+                border: 1px solid #e5e7eb;
+                padding: 6pt 8pt;
+                text-align: left;
+            }
+
+            th {
+                background: #f3f4f6;
+                font-weight: bold;
+                color: #1f2937;
+            }
+
+            tr:nth-child(even) {
+                background: #f9fafb;
+            }
+
+            /* Blockquotes */
+            blockquote {
+                border-left: 3pt solid #d1d5db;
+                margin: 12pt 0;
+                padding: 6pt 0 6pt 12pt;
+                color: #4b5563;
+                font-style: italic;
+            }
+
+            /* Images */
+            img {
+                max-width: 100%;
+                height: auto;
+                margin: 12pt 0;
+            }
+
+            hr {
+                border: none;
+                border-top: 1px solid #e5e7eb;
+                margin: 18pt 0;
+            }
+
+            strong {
+                font-weight: bold;
+            }
+
+            em {
+                font-style: italic;
+            }
+
+            footer {
+                margin-top: 24pt;
+                padding-top: 12pt;
+                border-top: 1px solid #e5e7eb;
+                text-align: center;
+                font-size: 8pt;
+                color: #9ca3af;
+                font-style: italic;
+            }
+        """)
+
+        # Generate PDF
+        buffer = BytesIO()
+        HTML(string=full_html, base_url=base_url).write_pdf(buffer, stylesheets=[css])
         buffer.seek(0)
+
         return buffer

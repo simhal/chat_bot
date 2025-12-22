@@ -91,25 +91,13 @@ class ArticleResourceService:
             </div>'''
 
         elif resource_type == 'table':
-            # For tables, embed interactive table HTML directly
-            from services.table_resource_service import TableResourceService
-
+            # For tables, embed as simple HTML table (no interactivity)
             if db:
                 table_resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
                 if table_resource and table_resource.table_resource:
-                    # Generate unique table ID
-                    table_id = f"table-{hash_id}"
                     columns = table_resource.table_resource.columns or []
                     data = table_resource.table_resource.data or []
-
-                    # Generate embeddable HTML with interactive features
-                    embed_html = TableResourceService._generate_embeddable_table_html(
-                        table_id=table_id,
-                        name=safe_name,
-                        columns=columns,
-                        data=data
-                    )
-                    return embed_html
+                    return ArticleResourceService._generate_simple_table_html(safe_name, columns, data)
 
             # Fallback: link to table resource
             return f'''<div style="border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0;background:#f9fafb;">
@@ -128,6 +116,50 @@ class ArticleResourceService:
             return f'''<a href="{content_url}" target="_blank" style="display:inline-flex;align-items:center;gap:0.25rem;color:#3b82f6;text-decoration:none;padding:0.25rem 0.5rem;background:#eff6ff;border-radius:4px;">
                 {icon} {safe_name}
             </a>'''
+
+    @staticmethod
+    def _generate_simple_table_html(name: str, columns: list, data: list) -> str:
+        """
+        Generate a simple HTML table from table data.
+        No interactivity - just static HTML table for article embedding.
+
+        Args:
+            name: Table caption/title
+            columns: List of column names
+            data: List of rows (each row is a list of values)
+
+        Returns:
+            Simple styled HTML table
+        """
+        safe_name = html.escape(name)
+
+        # Generate header cells
+        header_cells = ''.join(
+            f'<th style="padding:0.5rem 0.75rem;text-align:left;font-weight:600;border-bottom:2px solid #e5e7eb;background:#f9fafb;">{html.escape(str(col))}</th>'
+            for col in columns
+        )
+
+        # Generate data rows
+        rows_html = ''
+        for i, row in enumerate(data):
+            bg_color = '#ffffff' if i % 2 == 0 else '#f9fafb'
+            cells = ''.join(
+                f'<td style="padding:0.5rem 0.75rem;border-bottom:1px solid #e5e7eb;">{html.escape(str(cell)) if cell is not None else ""}</td>'
+                for cell in row
+            )
+            rows_html += f'<tr style="background:{bg_color};">{cells}</tr>\n'
+
+        return f'''<div style="margin:1rem 0;overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.875rem;border:1px solid #e5e7eb;border-radius:8px;">
+                <caption style="text-align:left;font-weight:600;padding:0.75rem;background:#f3f4f6;border:1px solid #e5e7eb;border-bottom:none;border-radius:8px 8px 0 0;">{safe_name}</caption>
+                <thead>
+                    <tr>{header_cells}</tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>'''
 
     @staticmethod
     def _process_resource_links(content: str, db: Session, base_url: str = "") -> str:
@@ -739,7 +771,7 @@ class ArticleResourceService:
             )
 
             html_resource = Resource(
-                resource_type=ResourceType.TEXT,
+                resource_type=ResourceType.HTML,
                 name=f"{article.headline} - HTML",
                 description="HTML version of published article",
                 group_id=None,

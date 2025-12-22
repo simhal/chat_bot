@@ -453,22 +453,8 @@ async def edit_article(
             is_sticky=request.is_sticky
         )
 
-        # Regenerate article resources (PDF, HTML) when content or headline changes
-        if request.content is not None or request.headline is not None:
-            user_id = int(user.get("sub"))
-            article_model = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
-            if article_model:
-                # Get current content from ChromaDB
-                content = VectorService.get_article_content(article_id)
-                if content:
-                    parent, html_res, pdf_res = ArticleResourceService.create_article_resources(
-                        db=db,
-                        article=article_model,
-                        content=content,
-                        editor_user_id=user_id
-                    )
-                    if parent:
-                        logger.info(f"Regenerated resources for article {article_id} on save")
+        # Note: Article resources (PDF, HTML) are created on publish, not on save
+        # If editing a published article, user must recall and re-publish
 
         return updated_article
     except ValueError as e:
@@ -897,31 +883,60 @@ async def publish_article(
     user: dict = Depends(get_current_user)
 ):
     """
-    Publish an article (moves from 'editor' to 'published' status). Requires editor permission.
+    Publish an article (moves from 'editor' to 'published' status).
+    Creates publication resources (HTML, PDF).
+    Requires editor permission.
     """
     from dependencies import require_editor
-    
+    from services.article_resource_service import ArticleResourceService
+
     # Get article to check topic
     article = ContentService.get_article(db, article_id, increment_readership=False)
     if not article:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
-    
+
     # Check editor permission for this topic
     editor_check = require_editor(article["topic"])
     editor_check(user)
-    
+
     # Verify article is in editor status
     if article["status"] != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only articles in editor review can be published"
         )
-    
+
     try:
         # Use publish_article_with_editor which sets editor to publisher's email
         editor_email = user.get("email", "")
         updated = ContentService.publish_article_with_editor(db, article_id, editor_email)
-        return {"message": "Article published successfully", "article": updated}
+
+        # Create publication resources (HTML, PDF) on publish
+        user_id = int(user.get("sub"))
+        article_model = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+        resources_created = False
+        resources_warning = None
+
+        if article_model:
+            content = VectorService.get_article_content(article_id)
+            if content:
+                parent, html_res, pdf_res = ArticleResourceService.create_article_resources(
+                    db=db,
+                    article=article_model,
+                    content=content,
+                    editor_user_id=user_id
+                )
+                if parent:
+                    logger.info(f"Created publication resources for article {article_id}")
+                    resources_created = True
+            else:
+                logger.warning(f"No content found for article {article_id} - publication resources not created")
+                resources_warning = "Article content not found in vector database. Please re-save the article and publish again to generate HTML/PDF resources."
+
+        result = {"message": "Article published successfully", "article": updated, "resources_created": resources_created}
+        if resources_warning:
+            result["warning"] = resources_warning
+        return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

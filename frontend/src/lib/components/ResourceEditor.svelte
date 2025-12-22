@@ -1,6 +1,6 @@
 <script lang="ts">
     import { createEventDispatcher } from 'svelte';
-    import { uploadFileResource, createTextResource, createTableResource, linkResourceToArticle, unlinkResourceFromArticle, deleteResource, updateResource, getResourceContentUrl, getResource, updateTextContent, updateTableContent, updateTimeseriesData, type Resource, type ResourceDetail } from '$lib/api';
+    import { uploadFileResource, createTextResource, createTableResource, linkResourceToArticle, unlinkResourceFromArticle, deleteResource, updateResource, getResourceContentUrl, getResource, updateTextContent, updateTableContent, updateTimeseriesData, publishTableResource, recallTableResource, type Resource, type ResourceDetail } from '$lib/api';
 
     // Props
     export let resources: Resource[] = [];  // All resources linked to article
@@ -52,6 +52,7 @@
     // Preview popup state
     let previewResource: Resource | null = null;
     let previewTableData: { columns: string[]; data: any[][] } | null = null;
+    let previewHtmlChildHashId: string | null = null;  // For published tables with HTML child
     let previewLoading = false;
     let sortColumn: number | null = null;
     let sortDirection: 'asc' | 'desc' = 'asc';
@@ -317,9 +318,10 @@
                 }
             }
 
-            const finalColumns = columns.every(c => c === '')
-                ? columns.map((_, i) => `Column ${i + 1}`)
-                : columns;
+            // Replace empty column headers with placeholder names
+            const finalColumns = columns.map((col, i) =>
+                col === '' ? `Column ${i + 1}` : col
+            );
 
             return { columns: finalColumns, data };
         } catch (e) {
@@ -333,7 +335,12 @@
             const lines = text.trim().split('\n');
             if (lines.length < 2) return null;
 
-            const columns = lines[0].split('\t').map(c => c.trim());
+            const rawColumns = lines[0].split('\t').map(c => c.trim());
+            // Replace empty column headers with placeholder names
+            const columns = rawColumns.map((col, i) =>
+                col === '' ? `Column ${i + 1}` : col
+            );
+
             const data: any[][] = [];
 
             for (let i = 1; i < lines.length; i++) {
@@ -369,6 +376,36 @@
             dispatch('refresh');
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to remove resource';
+            dispatch('error', error);
+        }
+    }
+
+    // Publish a table resource (creates HTML/IMAGE children)
+    async function handlePublishTable(resource: Resource) {
+        if (resource.resource_type !== 'table') return;
+        if (!confirm(`Publish "${resource.name}"? This will create permanent HTML and image versions.`)) return;
+
+        try {
+            error = '';
+            await publishTableResource(resource.id);
+            dispatch('refresh');
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to publish table resource';
+            dispatch('error', error);
+        }
+    }
+
+    // Recall a published table resource (deletes children, returns to draft)
+    async function handleRecallTable(resource: Resource) {
+        if (resource.resource_type !== 'table') return;
+        if (!confirm(`Recall "${resource.name}"? This will delete the published HTML and image versions.`)) return;
+
+        try {
+            error = '';
+            await recallTableResource(resource.id);
+            dispatch('refresh');
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to recall table resource';
             dispatch('error', error);
         }
     }
@@ -445,7 +482,7 @@
     }
 
     function isViewableResource(resourceType: string): boolean {
-        return ['image', 'pdf', 'text', 'table', 'article'].includes(resourceType);
+        return ['image', 'pdf', 'text', 'html', 'table', 'article'].includes(resourceType);
     }
 
     function isEditableContent(resourceType: string): boolean {
@@ -470,7 +507,12 @@
     function handleTableDragStart(e: DragEvent, resource: Resource) {
         if (!e.dataTransfer) return;
         e.dataTransfer.effectAllowed = 'copy';
-        // Use resource link syntax - will be embedded as HTML table or image in PDF
+        // Set custom type to indicate this is a table that should be embedded as markdown
+        e.dataTransfer.setData('application/x-table-resource', JSON.stringify({
+            hashId: resource.hash_id,
+            name: resource.name
+        }));
+        // Fallback for text/plain (used if custom type not handled)
         e.dataTransfer.setData('text/plain', `[${resource.name}](resource:${resource.hash_id})`);
     }
 
@@ -487,6 +529,7 @@
     async function handleViewResource(resource: Resource) {
         previewResource = resource;
         previewTableData = null;
+        previewHtmlChildHashId = null;
         sortColumn = null;
         sortDirection = 'asc';
 
@@ -495,6 +538,18 @@
             try {
                 previewLoading = true;
                 const detail = await getResource(resource.id);
+
+                // For published tables, check if there's an HTML child to display
+                if (resource.status === 'published' && detail.children && detail.children.length > 0) {
+                    const htmlChild = detail.children.find(c => c.resource_type === 'html');
+                    if (htmlChild) {
+                        previewHtmlChildHashId = htmlChild.hash_id;
+                        previewLoading = false;
+                        return;  // Use HTML child instead of raw table data
+                    }
+                }
+
+                // Fall back to raw table data
                 if (detail.table_data?.data) {
                     previewTableData = {
                         columns: detail.table_data.data.columns || [],
@@ -512,6 +567,7 @@
     function closePreviewModal() {
         previewResource = null;
         previewTableData = null;
+        previewHtmlChildHashId = null;
         sortColumn = null;
         sortDirection = 'asc';
     }
@@ -810,6 +866,12 @@
                                             <button class="action-btn" on:click={() => handleEditContent(resource)} title="Edit Content">📝</button>
                                         {/if}
                                         <button class="action-btn" on:click={() => handleEditResource(resource)} title="Edit Metadata">✎</button>
+                                        {#if resource.resource_type === 'table' && resource.status !== 'published'}
+                                            <button class="action-btn publish" on:click={() => handlePublishTable(resource)} title="Publish">📤</button>
+                                        {/if}
+                                        {#if resource.resource_type === 'table' && resource.status === 'published'}
+                                            <button class="action-btn recall" on:click={() => handleRecallTable(resource)} title="Recall">📥</button>
+                                        {/if}
                                         {#if showDeleteButton || (articleId && showUnlinkButton)}
                                             <button class="action-btn remove" on:click={() => handleRemoveResource(resource)} title="Remove">×</button>
                                         {/if}
@@ -831,11 +893,11 @@
                     <button class="section-header" on:click={() => topicSectionOpen = !topicSectionOpen}>
                         <span class="toggle-icon">{topicSectionOpen ? '▼' : '▶'}</span>
                         <span class="section-title">Topic Resources</span>
-                        <span class="section-count">{linkedTopicResources.length}</span>
+                        <span class="section-count">{linkedTopicResources.length}{#if availableTopicResources.length > 0}<span class="available-count">+{availableTopicResources.length}</span>{/if}</span>
                     </button>
                     {#if availableTopicResources.length > 0}
                         <button class="import-btn" on:click={() => openImportModal('topic')}>
-                            + Import
+                            + Import ({availableTopicResources.length})
                         </button>
                     {/if}
                 </div>
@@ -860,6 +922,12 @@
                                                 <button class="action-btn" on:click={() => handleEditContent(resource)} title="Edit Content">📝</button>
                                             {/if}
                                             <button class="action-btn" on:click={() => handleEditResource(resource)} title="Edit Metadata">✎</button>
+                                            {#if resource.resource_type === 'table' && resource.status !== 'published'}
+                                                <button class="action-btn publish" on:click={() => handlePublishTable(resource)} title="Publish">📤</button>
+                                            {/if}
+                                            {#if resource.resource_type === 'table' && resource.status === 'published'}
+                                                <button class="action-btn recall" on:click={() => handleRecallTable(resource)} title="Recall">📥</button>
+                                            {/if}
                                             {#if articleId && showUnlinkButton}
                                                 <button class="action-btn remove" on:click={() => handleRemoveResource(resource)} title="Remove">×</button>
                                             {/if}
@@ -880,11 +948,11 @@
                     <button class="section-header" on:click={() => globalSectionOpen = !globalSectionOpen}>
                         <span class="toggle-icon">{globalSectionOpen ? '▼' : '▶'}</span>
                         <span class="section-title">Global Resources</span>
-                        <span class="section-count">{linkedGlobalResources.length}</span>
+                        <span class="section-count">{linkedGlobalResources.length}{#if availableGlobalResources.length > 0}<span class="available-count">+{availableGlobalResources.length}</span>{/if}</span>
                     </button>
                     {#if availableGlobalResources.length > 0}
                         <button class="import-btn" on:click={() => openImportModal('global')}>
-                            + Import
+                            + Import ({availableGlobalResources.length})
                         </button>
                     {/if}
                 </div>
@@ -909,6 +977,12 @@
                                                 <button class="action-btn" on:click={() => handleEditContent(resource)} title="Edit Content">📝</button>
                                             {/if}
                                             <button class="action-btn" on:click={() => handleEditResource(resource)} title="Edit Metadata">✎</button>
+                                            {#if resource.resource_type === 'table' && resource.status !== 'published'}
+                                                <button class="action-btn publish" on:click={() => handlePublishTable(resource)} title="Publish">📤</button>
+                                            {/if}
+                                            {#if resource.resource_type === 'table' && resource.status === 'published'}
+                                                <button class="action-btn recall" on:click={() => handleRecallTable(resource)} title="Recall">📥</button>
+                                            {/if}
                                             {#if articleId && showUnlinkButton}
                                                 <button class="action-btn remove" on:click={() => handleRemoveResource(resource)} title="Remove">×</button>
                                             {/if}
@@ -1142,6 +1216,13 @@
                             <div class="spinner-small"></div>
                             <span>Loading table...</span>
                         </div>
+                    {:else if previewHtmlChildHashId}
+                        <!-- Published table: show HTML child resource -->
+                        <iframe
+                            src={getResourceContentUrl(previewHtmlChildHashId)}
+                            title={previewResource.name}
+                            class="preview-table-html"
+                        ></iframe>
                     {:else if sortedTableData}
                         <div class="preview-table-container">
                             <table class="preview-data-table">
@@ -1572,6 +1653,11 @@
         font-weight: 500;
     }
 
+    .section-count .available-count {
+        color: #10b981;
+        margin-left: 0.15rem;
+    }
+
     .import-btn {
         padding: 0.25rem 0.5rem;
         margin-right: 0.5rem;
@@ -1681,6 +1767,16 @@
     .action-btn.remove:hover {
         background: #fee2e2;
         color: #dc2626;
+    }
+
+    .action-btn.publish:hover {
+        background: #d1fae5;
+        color: #059669;
+    }
+
+    .action-btn.recall:hover {
+        background: #fef3c7;
+        color: #d97706;
     }
 
     .draggable-resource {
@@ -2033,7 +2129,8 @@
 
     .preview-pdf,
     .preview-text,
-    .preview-article {
+    .preview-article,
+    .preview-table-html {
         width: 100%;
         height: 100%;
         border: none;

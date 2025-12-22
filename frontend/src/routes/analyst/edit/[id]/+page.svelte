@@ -2,7 +2,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/stores/auth';
-    import { getArticle, editArticle, chatWithContentAgent, approveArticle, getArticleResources, getGlobalResources, getGroupResources, getResource, type Resource } from '$lib/api';
+    import { getArticle, editArticle, chatWithContentAgent, approveArticle, getArticleResources, getGlobalResources, getGroupResources, getResource, getResourceContentUrl, type Resource } from '$lib/api';
     import { onMount } from 'svelte';
     import Markdown from '$lib/components/Markdown.svelte';
     import ResourceEditor from '$lib/components/ResourceEditor.svelte';
@@ -135,9 +135,16 @@
     async function handleSubmit() {
         if (!article) return;
         try {
+            // Save the article first before changing status
+            saving = true;
+            await editArticle(article.id, editHeadline, editContent, editKeywords, article.status);
+            saving = false;
+
+            // Then submit to editor
             await approveArticle(article.id);
             goto(`/analyst/${article.topic}`);
         } catch (e) {
+            saving = false;
             error = e instanceof Error ? e.message : 'Failed to submit article';
         }
     }
@@ -239,19 +246,96 @@
         return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
+    // Convert table data to markdown table format
+    function tableToMarkdown(name: string, columns: string[], data: any[][]): string {
+        // Ensure we have at least one column
+        if (!columns.length && !data.length) return `<!-- Empty table: ${name} -->`;
+
+        // If no columns but data exists, create placeholder columns based on first row
+        let finalColumns = columns;
+        if (!columns.length && data.length > 0) {
+            finalColumns = data[0].map((_, i) => `Column ${i + 1}`);
+        }
+
+        // Replace empty column headers with placeholder names
+        finalColumns = finalColumns.map((col, i) => {
+            const colStr = col != null ? String(col).trim() : '';
+            return colStr === '' ? `Column ${i + 1}` : colStr;
+        });
+
+        if (!finalColumns.length) return `<!-- Empty table: ${name} -->`;
+
+        const lines: string[] = [];
+
+        // Add table caption as bold text
+        lines.push(`**${name}**\n`);
+
+        // Header row
+        lines.push('| ' + finalColumns.map(col => String(col).replace(/\|/g, '\\|')).join(' | ') + ' |');
+
+        // Separator row
+        lines.push('| ' + finalColumns.map(() => '---').join(' | ') + ' |');
+
+        // Data rows
+        for (const row of data) {
+            // Ensure row has same number of cells as columns
+            const paddedRow = [...row];
+            while (paddedRow.length < finalColumns.length) {
+                paddedRow.push('');
+            }
+            const cells = paddedRow.slice(0, finalColumns.length).map(cell => {
+                const val = cell != null ? String(cell) : '';
+                return val.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+            });
+            lines.push('| ' + cells.join(' | ') + ' |');
+        }
+
+        return lines.join('\n');
+    }
+
     // Handle drop of resources onto the content textarea
     async function handleContentDrop(e: DragEvent) {
         e.preventDefault();
-        const text = e.dataTransfer?.getData('text/plain');
-        if (!text) return;
 
         const textarea = e.target as HTMLTextAreaElement;
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
 
+        // Check if it's a table resource (custom data type)
+        const tableData = e.dataTransfer?.getData('application/x-table-resource');
+        if (tableData) {
+            try {
+                const { hashId, name } = JSON.parse(tableData);
+                // Fetch table data from API
+                const contentUrl = getResourceContentUrl(hashId);
+                const response = await fetch(contentUrl);
+                if (response.ok) {
+                    const tableJson = await response.json();
+                    const columns = tableJson.columns || [];
+                    const data = tableJson.data || [];
+
+                    // Convert to markdown table
+                    const markdownTable = tableToMarkdown(name, columns, data);
+
+                    // Insert at cursor position
+                    editContent = editContent.substring(0, start) + '\n' + markdownTable + '\n' + editContent.substring(end);
+
+                    setTimeout(() => {
+                        textarea.selectionStart = textarea.selectionEnd = start + markdownTable.length + 2;
+                        textarea.focus();
+                    }, 0);
+                    return;
+                }
+            } catch (err) {
+                console.error('Failed to fetch table data:', err);
+            }
+        }
+
+        // Fallback to text/plain for other resources
+        const text = e.dataTransfer?.getData('text/plain');
+        if (!text) return;
+
         // Check if it's a markdown image link (![name](url)) or a resource link ([name](resource:hash_id))
-        // Resource links are used for tables, articles, PDFs, etc. and will be embedded appropriately
-        // during HTML rendering (inline) or PDF generation (as images)
         const isMarkdownImage = text.startsWith('![') && text.includes('](');
         const isResourceLink = text.startsWith('[') && text.includes('](resource:');
 

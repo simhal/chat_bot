@@ -525,7 +525,15 @@ export interface Resource {
     is_active: boolean;
 }
 
+export interface ChildResourceInfo {
+    id: number;
+    hash_id: string;
+    resource_type: string;
+    name: string;
+}
+
 export interface ResourceDetail extends Resource {
+    children?: ChildResourceInfo[];
     file_data?: {
         filename: string;
         file_path: string;
@@ -592,13 +600,15 @@ export async function getGlobalResources(
     resourceType?: string,
     search?: string,
     offset: number = 0,
-    limit: number = 50
+    limit: number = 50,
+    includeLinked: boolean = true
 ): Promise<ResourceListResponse> {
     const params = new URLSearchParams();
     if (resourceType) params.append('resource_type', resourceType);
     if (search) params.append('search', search);
     params.append('offset', offset.toString());
     params.append('limit', limit.toString());
+    params.append('include_linked', includeLinked.toString());
 
     const query = params.toString();
     return apiRequest(`/api/resources/global${query ? '?' + query : ''}`);
@@ -748,6 +758,20 @@ export async function updateResourceStatus(resourceId: number, status: string): 
     return apiRequest(`/api/resources/${resourceId}/status`, {
         method: 'PUT',
         body: JSON.stringify({ status })
+    });
+}
+
+// Publish a table resource (creates HTML/IMAGE children)
+export async function publishTableResource(resourceId: number): Promise<ResourceDetail> {
+    return apiRequest(`/api/resources/${resourceId}/publish`, {
+        method: 'POST'
+    });
+}
+
+// Recall a published table resource (deletes children, returns to draft)
+export async function recallTableResource(resourceId: number): Promise<ResourceDetail> {
+    return apiRequest(`/api/resources/${resourceId}/recall`, {
+        method: 'POST'
     });
 }
 

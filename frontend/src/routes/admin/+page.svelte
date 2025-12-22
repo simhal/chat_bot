@@ -94,6 +94,22 @@
     let selectedTopic: string = '';
     let initialViewSet = false;
 
+    // Persist selected topic to localStorage (shared across analyst, editor, admin)
+    const SELECTED_TOPIC_KEY = 'selected_topic';
+
+    function saveSelectedTopic(topic: string) {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(SELECTED_TOPIC_KEY, topic);
+        }
+    }
+
+    function getSavedTopic(): string | null {
+        if (typeof localStorage !== 'undefined') {
+            return localStorage.getItem(SELECTED_TOPIC_KEY);
+        }
+        return null;
+    }
+
     // Topic management state
     let showCreateTopicModal = false;
     let newTopicSlug = '';
@@ -145,11 +161,22 @@
     $: if (!initialViewSet && $auth.isAuthenticated && !topicsLoading) {
         if (adminTopics.length > 0) {
             currentView = 'topics';
-            selectedTopic = adminTopics[0].id;
+            // Try to restore saved topic if it's accessible to the user
+            const savedTopic = getSavedTopic();
+            if (savedTopic && adminTopics.some(t => t.id === savedTopic)) {
+                selectedTopic = savedTopic;
+            } else {
+                selectedTopic = adminTopics[0].id;
+            }
         } else if (isGlobalAdmin) {
             currentView = 'users';
         }
         initialViewSet = true;
+    }
+
+    // Save selected topic when it changes
+    $: if (selectedTopic && initialViewSet) {
+        saveSelectedTopic(selectedTopic);
     }
 
     async function loadTopicsFromDb(recalculate: boolean = false) {
@@ -2156,22 +2183,22 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        border-bottom: 1px solid #e5e7eb;
+        padding: 1rem 1.5rem;
         background: white;
-        padding: 0.75rem 1rem;
-        gap: 1rem;
+        border-bottom: 1px solid #e5e7eb;
+        margin-bottom: 2rem;
     }
 
     .header-left {
         display: flex;
         align-items: center;
-        gap: 0.75rem;
+        gap: 1rem;
     }
 
     .topic-selector {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.75rem;
     }
 
     .topic-selector label {

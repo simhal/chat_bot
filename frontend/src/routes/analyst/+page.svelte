@@ -4,6 +4,16 @@
     import { onMount } from 'svelte';
     import { getTopics } from '$lib/api';
 
+    // Shared localStorage key for topic persistence across analyst, editor, admin
+    const SELECTED_TOPIC_KEY = 'selected_topic';
+
+    function getSavedTopic(): string | null {
+        if (typeof localStorage !== 'undefined') {
+            return localStorage.getItem(SELECTED_TOPIC_KEY);
+        }
+        return null;
+    }
+
     function hasTopicAccess(topic: string): boolean {
         if (!$auth.user?.scopes) return false;
         // Global admin can access all topics
@@ -22,6 +32,13 @@
             // Load topics from database
             const dbTopics = await getTopics(); // Show all topics
             const sortedTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
+
+            // Check for saved topic first
+            const savedTopic = getSavedTopic();
+            if (savedTopic && sortedTopics.some(t => t.slug === savedTopic && hasTopicAccess(t.slug))) {
+                goto(`/analyst/${savedTopic}`);
+                return;
+            }
 
             // Find first available topic for user
             const firstTopic = sortedTopics.find(topic => hasTopicAccess(topic.slug));

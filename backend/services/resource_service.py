@@ -653,6 +653,7 @@ class ResourceService:
             result["children"] = [
                 {
                     "id": child.id,
+                    "hash_id": child.hash_id,
                     "resource_type": child.resource_type.value if hasattr(child.resource_type, 'value') else child.resource_type,
                     "name": child.name
                 }
@@ -815,12 +816,19 @@ class ResourceService:
         if created_by:
             query = query.filter(Resource.created_by == created_by)
         if exclude_article_linked:
-            # Exclude resources that are linked to any article
+            # Exclude resources that are linked to any article, EXCEPT for ARTICLE type resources
+            # ARTICLE resources represent published articles and should always be visible
             from sqlalchemy import exists, select
             linked_subquery = select(article_resources.c.resource_id).where(
                 article_resources.c.resource_id == Resource.id
             ).exists()
-            query = query.filter(~linked_subquery)
+            # Include resource if: NOT linked to article OR is an ARTICLE type resource
+            query = query.filter(
+                or_(
+                    ~linked_subquery,
+                    Resource.resource_type == ResourceType.ARTICLE
+                )
+            )
         if search:
             search_pattern = f"%{search}%"
             query = query.filter(

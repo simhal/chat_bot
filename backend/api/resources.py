@@ -60,6 +60,7 @@ class ResourceResponse(BaseModel):
 class ChildResourceInfo(BaseModel):
     """Brief info about a child resource."""
     id: int
+    hash_id: str
     resource_type: str
     name: str
 
@@ -368,6 +369,7 @@ async def list_global_resources(
     search: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
+    include_linked: bool = False,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
@@ -375,6 +377,10 @@ async def list_global_resources(
     List global resources (resources with no group - group_id = NULL).
 
     Any authenticated user can view global resources for attaching to articles.
+
+    Args:
+        include_linked: If True, include resources already linked to articles (for categorization).
+                       If False (default), exclude them (for import modal).
     """
     # Convert resource_type string to enum if provided
     rt = None
@@ -387,9 +393,10 @@ async def list_global_resources(
                 detail=f"Invalid resource type: {resource_type}"
             )
 
-    # Get resources with no group (group_id = NULL) and not linked to any article
+    # Get resources with no group (group_id = NULL)
+    # exclude_article_linked is the opposite of include_linked
     resources, total = ResourceService.list_resources(
-        db, rt, None, None, search, offset, limit, global_only=True, exclude_article_linked=True
+        db, rt, None, None, search, offset, limit, global_only=True, exclude_article_linked=not include_linked
     )
 
     return ResourceListResponse(
@@ -502,16 +509,7 @@ async def create_table_resource(
             parent_id=request.parent_id
         )
 
-        # Create HTML child resource for the table
-        html_resource, image_resource = TableResourceService.create_table_publication_resources(
-            db=db,
-            table_resource=resource,
-            user_id=user_id
-        )
-        if html_resource:
-            import logging
-            logger = logging.getLogger("uvicorn")
-            logger.info(f"Created HTML child resource for table {resource.id}")
+        # Note: HTML/IMAGE child resources are created on publish, not on save
 
         return ResourceDetailResponse(**ResourceService.get_resource(db, resource.id))
     except ValueError as e:
@@ -1048,21 +1046,8 @@ async def update_table_content(
             detail="Failed to update table content"
         )
 
-    # Regenerate HTML child resource for the table
-    table_resource = db.query(Resource).filter(Resource.id == resource_id).first()
-    if table_resource:
-        # Delete old child resources first
-        TableResourceService.delete_table_publication_resources(db, resource_id)
-        # Create new ones with updated data
-        html_resource, image_resource = TableResourceService.create_table_publication_resources(
-            db=db,
-            table_resource=table_resource,
-            user_id=user_id
-        )
-        if html_resource:
-            import logging
-            logger = logging.getLogger("uvicorn")
-            logger.info(f"Regenerated HTML child resource for table {resource_id}")
+    # Note: HTML/IMAGE child resources are regenerated on publish, not on save
+    # If the table was already published, user must re-publish to update child resources
 
     return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
 
@@ -1305,9 +1290,9 @@ async def update_resource_status(
     Status transitions: draft -> editor -> published
     Same workflow as articles.
 
-    Note: Child resources (HTML, PDF for articles; HTML for tables) are now
-    created/updated on save, not on status change. This endpoint only changes
-    the status flag.
+    Note: For tables, use /{resource_id}/publish and /{resource_id}/recall
+    endpoints instead, which also manage child resources (HTML, IMAGE).
+    This endpoint only changes the status flag without creating children.
     """
     # Get current resource
     resource_data = ResourceService.get_resource(db, resource_id)
@@ -1349,6 +1334,132 @@ async def update_resource_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update resource status"
         )
+
+    return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
+
+
+@router.post("/{resource_id}/publish", response_model=ResourceDetailResponse)
+async def publish_table_resource(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Publish a table resource.
+
+    Creates HTML and IMAGE child resources for the published table.
+    Changes status from draft/editor to published.
+
+    Only applicable to table resources.
+    """
+    resource_data = ResourceService.get_resource(db, resource_id)
+
+    if not resource_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"
+        )
+
+    if resource_data.get("resource_type") != "table":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only table resources can be published via this endpoint"
+        )
+
+    # Permission check
+    scopes = current_user.get("scopes", [])
+    if not can_manage_resource(scopes, resource_data.get("group_id"), db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to publish this resource"
+        )
+
+    user_id = int(current_user.get("sub"))
+
+    # Get the table resource
+    table_resource = db.query(Resource).filter(Resource.id == resource_id).first()
+
+    # Create publication resources (HTML + IMAGE children)
+    html_resource, image_resource = TableResourceService.create_table_publication_resources(
+        db=db,
+        table_resource=table_resource,
+        user_id=user_id
+    )
+
+    if not html_resource:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create publication resources"
+        )
+
+    # Update status to published
+    ResourceService.update_resource_status(
+        db=db,
+        resource_id=resource_id,
+        status=ResourceStatus.PUBLISHED,
+        user_id=user_id
+    )
+
+    logger.info(f"Published table resource {resource_id} with HTML child {html_resource.id}")
+
+    return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
+
+
+@router.post("/{resource_id}/recall", response_model=ResourceDetailResponse)
+async def recall_table_resource(
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Recall a published table resource.
+
+    Deletes HTML and IMAGE child resources.
+    Changes status from published back to draft.
+
+    Only applicable to table resources.
+    """
+    resource_data = ResourceService.get_resource(db, resource_id)
+
+    if not resource_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found"
+        )
+
+    if resource_data.get("resource_type") != "table":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only table resources can be recalled via this endpoint"
+        )
+
+    if resource_data.get("status") != "published":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only published resources can be recalled"
+        )
+
+    # Permission check
+    scopes = current_user.get("scopes", [])
+    if not can_manage_resource(scopes, resource_data.get("group_id"), db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to recall this resource"
+        )
+
+    user_id = int(current_user.get("sub"))
+
+    # Delete publication resources (HTML + IMAGE children)
+    deleted_count = TableResourceService.delete_table_publication_resources(db, resource_id)
+    logger.info(f"Deleted {deleted_count} publication resources for table {resource_id}")
+
+    # Update status to draft
+    ResourceService.update_resource_status(
+        db=db,
+        resource_id=resource_id,
+        status=ResourceStatus.DRAFT,
+        user_id=user_id
+    )
 
     return ResourceDetailResponse(**ResourceService.get_resource(db, resource_id))
 
