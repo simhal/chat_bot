@@ -68,26 +68,12 @@ class ArticleResourceService:
         content_url = f"{base_url}/api/resources/content/{hash_id}"
         safe_name = html.escape(name)
 
-        # Resource type icons (using simple text for HTML compatibility)
-        icons = {
-            'image': '&#128444;',  # Picture
-            'pdf': '&#128196;',    # Page with curl
-            'text': '&#128221;',   # Memo
-            'table': '&#128202;',  # Chart
-            'excel': '&#128202;',
-            'csv': '&#128202;',
-            'default': '&#128206;' # Paperclip
-        }
-        icon = icons.get(resource_type, icons['default'])
-
         if resource_type == 'image':
             return f'<img src="{content_url}" alt="{safe_name}" style="max-width:100%;height:auto;border-radius:8px;margin:1rem 0;box-shadow:0 2px 8px rgba(0,0,0,0.1);" />'
 
         elif resource_type == 'pdf':
             return f'''<div style="padding:1rem;background:#f8f9fa;border-radius:8px;border-left:4px solid #3b82f6;margin:1rem 0;">
-                <a href="{content_url}" target="_blank" style="display:flex;align-items:center;gap:0.5rem;color:#3b82f6;text-decoration:none;font-weight:500;">
-                    {icon} {safe_name}
-                </a>
+                <a href="{content_url}" target="_blank" style="color:#3b82f6;text-decoration:none;font-weight:500;">{safe_name}</a>
             </div>'''
 
         elif resource_type == 'table':
@@ -101,21 +87,17 @@ class ArticleResourceService:
 
             # Fallback: link to table resource
             return f'''<div style="border:1px solid #e5e7eb;border-radius:8px;padding:1rem;margin:1rem 0;background:#f9fafb;">
-                <a href="{content_url}" target="_blank" style="display:flex;align-items:center;gap:0.5rem;color:#3b82f6;text-decoration:none;font-weight:500;">
-                    {icon} {safe_name}
-                </a>
+                <a href="{content_url}" target="_blank" style="color:#3b82f6;text-decoration:none;font-weight:500;">{safe_name}</a>
             </div>'''
 
         elif resource_type == 'text':
             return f'''<blockquote style="background:#f8f9fa;border-left:4px solid #6b7280;padding:1rem;margin:1rem 0;font-style:normal;">
-                <cite style="display:block;font-weight:600;margin-bottom:0.5rem;font-style:normal;">{icon} {safe_name}</cite>
+                <cite style="display:block;font-weight:600;margin-bottom:0.5rem;font-style:normal;">{safe_name}</cite>
                 <a href="{content_url}" target="_blank" style="color:#3b82f6;text-decoration:none;">View Full Text</a>
             </blockquote>'''
 
         else:
-            return f'''<a href="{content_url}" target="_blank" style="display:inline-flex;align-items:center;gap:0.25rem;color:#3b82f6;text-decoration:none;padding:0.25rem 0.5rem;background:#eff6ff;border-radius:4px;">
-                {icon} {safe_name}
-            </a>'''
+            return f'''<a href="{content_url}" target="_blank" style="color:#3b82f6;text-decoration:none;padding:0.25rem 0.5rem;background:#eff6ff;border-radius:4px;">{safe_name}</a>'''
 
     @staticmethod
     def _generate_simple_table_html(name: str, columns: list, data: list) -> str:
@@ -465,13 +447,17 @@ class ArticleResourceService:
             safe_keywords = html.escape(keywords)
             keywords_html = f'<div class="modal-keywords"><strong>Keywords:</strong> {safe_keywords}</div>'
 
-        # Action buttons
-        action_buttons = ['<button onclick="window.close()" class="back-btn">← Close</button>']
-        if html_hash_id:
-            action_buttons.append(f'<a href="{base_url}/api/resources/content/{html_hash_id}" target="_blank" class="view-html-btn">View as HTML</a>')
+        # Action buttons - use history.back() to return to calling page
+        action_buttons = ['<button onclick="goBack()" class="back-btn">← Back</button>']
         if pdf_hash_id:
             action_buttons.append(f'<a href="{base_url}/api/resources/content/{pdf_hash_id}" download class="download-pdf-btn">Download PDF</a>')
         actions_html = "\n                    ".join(action_buttons)
+
+        # Content section - use iframe to embed HTML child resource, or fallback to generated content
+        if html_hash_id:
+            content_html = f'<iframe id="article-frame" src="{base_url}/api/resources/content/{html_hash_id}" style="width:100%;border:none;min-height:500px;"></iframe>'
+        else:
+            content_html = html_content
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -564,14 +550,6 @@ class ArticleResourceService:
         }}
         .back-btn:hover {{
             background: #e5e7eb;
-        }}
-        .view-html-btn {{
-            background: #eff6ff;
-            color: #3b82f6;
-            border: 1px solid #bfdbfe;
-        }}
-        .view-html-btn:hover {{
-            background: #dbeafe;
         }}
         .download-pdf-btn {{
             background: #3b82f6;
@@ -683,7 +661,7 @@ class ArticleResourceService:
                     <span class="topic-badge">{topic_display}</span>
                     <h2>{safe_headline}</h2>
                 </div>
-                <button class="close-btn" onclick="window.close()">×</button>
+                <button class="close-btn" onclick="goBack()">×</button>
             </div>
             <div class="modal-actions-fixed">
                 {actions_html}
@@ -695,10 +673,25 @@ class ArticleResourceService:
             </div>
             {keywords_html}
             <div class="modal-content">
-                {html_content}
+                {content_html}
             </div>
         </div>
     </div>
+    <script>
+        function goBack() {{
+            // Try to go back in history
+            if (window.history.length > 1) {{
+                window.history.back();
+            }} else {{
+                // If no history, try to close the window (works if opened via JS)
+                window.close();
+                // If close didn't work, redirect to home
+                setTimeout(function() {{
+                    window.location.href = '/';
+                }}, 100);
+            }}
+        }}
+    </script>
 </body>
 </html>"""
 
@@ -1006,9 +999,12 @@ class ArticleResourceService:
             article_id: ContentArticle ID
 
         Returns:
-            Dict with hash_ids: {"html": "...", "pdf": "...", "markdown": "..."}
+            Dict with hash_ids: {"popup": "...", "html": "...", "pdf": "..."}
+            - popup: Parent ARTICLE resource with popup HTML (shown in navbar)
+            - html: HTML child resource (standalone HTML version)
+            - pdf: PDF child resource (downloadable PDF)
         """
-        result = {"html": None, "pdf": None, "markdown": None}
+        result = {"popup": None, "html": None, "pdf": None}
 
         # Find ARTICLE resources for this article
         links = db.execute(
@@ -1025,7 +1021,7 @@ class ArticleResourceService:
             ).first()
 
             if parent:
-                result["markdown"] = parent.hash_id
+                result["popup"] = parent.hash_id
 
                 # Get children
                 children = db.query(Resource).filter(
@@ -1034,7 +1030,7 @@ class ArticleResourceService:
                 ).all()
 
                 for child in children:
-                    if child.resource_type == ResourceType.TEXT:
+                    if child.resource_type == ResourceType.HTML:
                         result["html"] = child.hash_id
                     elif child.resource_type == ResourceType.PDF:
                         result["pdf"] = child.hash_id

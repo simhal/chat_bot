@@ -49,6 +49,15 @@ class TonalityCreate(BaseModel):
     sort_order: int = 99
 
 
+class ContentAgentCreate(BaseModel):
+    """Request model for creating a new content agent prompt."""
+    name: str
+    template_text: str
+    prompt_group: str  # Required - the topic this agent belongs to
+    description: Optional[str] = None
+    sort_order: int = 99
+
+
 class TonalityPreferences(BaseModel):
     """User tonality preferences."""
     chat_tonality_id: Optional[int] = None
@@ -243,7 +252,7 @@ async def create_tonality(
     """
     # Validate
     is_valid, error_msg = PromptValidator.validate_template(
-        PromptType.TONALITY.value,
+        PromptType.TONALITY,
         tonality.template_text,
         tonality.prompt_group
     )
@@ -255,7 +264,7 @@ async def create_tonality(
 
     # Check for duplicate name
     existing = db.query(PromptModule).filter(
-        PromptModule.prompt_type == PromptType.TONALITY.value,
+        PromptModule.prompt_type == PromptType.TONALITY,
         PromptModule.name == tonality.name,
         PromptModule.is_active == True
     ).first()
@@ -266,7 +275,7 @@ async def create_tonality(
             detail=f"Tonality with name '{tonality.name}' already exists"
         )
 
-    user_id = current_user.get('sub') if current_user else None
+    user_id = int(current_user.get('sub')) if current_user and current_user.get('sub') else None
 
     new_module = PromptModule(
         name=tonality.name,
@@ -276,6 +285,79 @@ async def create_tonality(
         description=tonality.description,
         is_default=False,
         sort_order=tonality.sort_order,
+        is_active=True,
+        version=1,
+        created_by=user_id
+    )
+
+    db.add(new_module)
+    db.commit()
+    db.refresh(new_module)
+
+    # Invalidate cache
+    PromptService.invalidate_cache()
+
+    return PromptModuleResponse(
+        id=new_module.id,
+        name=new_module.name,
+        prompt_type=new_module.prompt_type.value if hasattr(new_module.prompt_type, 'value') else new_module.prompt_type,
+        prompt_group=new_module.prompt_group,
+        template_text=new_module.template_text,
+        description=new_module.description,
+        is_default=new_module.is_default,
+        sort_order=new_module.sort_order,
+        is_active=new_module.is_active,
+        version=new_module.version,
+        created_at=new_module.created_at.isoformat() if new_module.created_at else None,
+        updated_at=new_module.updated_at.isoformat() if new_module.updated_at else None
+    )
+
+
+@router.post("/content-agent", response_model=PromptModuleResponse, status_code=status.HTTP_201_CREATED)
+async def create_content_agent(
+    agent: ContentAgentCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Create a new content agent prompt for a topic.
+    Only global:admin can create new content agents.
+    """
+    # Validate
+    is_valid, error_msg = PromptValidator.validate_template(
+        PromptType.CONTENT_TOPIC,
+        agent.template_text,
+        agent.prompt_group
+    )
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg
+        )
+
+    # Check for duplicate - only one content_topic per prompt_group
+    existing = db.query(PromptModule).filter(
+        PromptModule.prompt_type == PromptType.CONTENT_TOPIC,
+        PromptModule.prompt_group == agent.prompt_group,
+        PromptModule.is_active == True
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Content agent for topic '{agent.prompt_group}' already exists"
+        )
+
+    user_id = int(current_user.get('sub')) if current_user and current_user.get('sub') else None
+
+    new_module = PromptModule(
+        name=agent.name,
+        prompt_type=PromptType.CONTENT_TOPIC,
+        prompt_group=agent.prompt_group,
+        template_text=agent.template_text,
+        description=agent.description,
+        is_default=False,
+        sort_order=agent.sort_order,
         is_active=True,
         version=1,
         created_by=user_id
@@ -393,7 +475,7 @@ async def set_default_tonality(
 
     # Remove default from all other tonalities
     db.query(PromptModule).filter(
-        PromptModule.prompt_type == PromptType.TONALITY.value,
+        PromptModule.prompt_type == PromptType.TONALITY,
         PromptModule.is_default == True
     ).update({"is_default": False})
 

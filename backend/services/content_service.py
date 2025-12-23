@@ -678,12 +678,15 @@ class ContentService:
         if content is not None or headline is not None:
             # Get current content from ChromaDB if not updating it
             if content is None:
-                content = VectorService.get_article_content(article_id)
-                if content is None:
-                    logger.error(f"Cannot update article {article_id}: content not found in ChromaDB")
+                existing_content = VectorService.get_article_content(article_id)
+                if existing_content is None:
+                    logger.warning(f"No existing content found in ChromaDB for article {article_id}")
                     content = ""
+                else:
+                    content = existing_content
 
-            VectorService.update_article(
+            logger.info(f"Syncing article {article_id} to ChromaDB (content length: {len(content)})")
+            success = VectorService.update_article(
                 article_id=article.id,
                 headline=article.headline,
                 content=content,
@@ -697,6 +700,10 @@ class ContentService:
                     "updated_at": article.updated_at
                 }
             )
+            if success:
+                logger.info(f"✓ Article {article_id} synced to ChromaDB successfully")
+            else:
+                logger.error(f"✗ Failed to sync article {article_id} to ChromaDB")
 
         # Return article dict with content from ChromaDB
         article_dict = ContentService._article_to_dict(article, include_content=True)

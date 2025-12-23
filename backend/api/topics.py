@@ -89,6 +89,7 @@ class TopicListResponse(BaseModel):
     color: Optional[str]
     sort_order: int
     article_order: str
+    agent_type: Optional[str]
 
     class Config:
         from_attributes = True
@@ -124,7 +125,7 @@ def create_groups_for_topic(db: Session, topic: Topic) -> List[Group]:
     return groups
 
 
-@router.get("/", response_model=List[TopicListResponse])
+@router.get("", response_model=List[TopicListResponse])
 async def list_topics(
     active_only: bool = False,
     visible_only: bool = False,
@@ -159,7 +160,8 @@ async def list_topics(
             icon=t.icon,
             color=t.color,
             sort_order=t.sort_order,
-            article_order=t.article_order
+            article_order=t.article_order,
+            agent_type=t.agent_type
         )
         for t in topics
     ]
@@ -237,7 +239,7 @@ async def get_topic(
     )
 
 
-@router.post("/", response_model=TopicResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=TopicResponse, status_code=status.HTTP_201_CREATED)
 async def create_topic(
     topic_data: TopicCreate,
     db: Session = Depends(get_db),

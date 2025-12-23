@@ -30,6 +30,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create HTML and IMAGE children for existing table resources."""
+    # Commit any pending changes to ensure the 'html' enum value from migration 022 is available
+    # PostgreSQL requires new enum values to be committed before they can be used
+    op.execute("COMMIT")
+
     bind = op.get_bind()
     session = Session(bind=bind)
 

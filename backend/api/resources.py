@@ -1585,6 +1585,19 @@ async def get_resource_content(
             }
         )
 
+    # Handle HTML resources (article HTML children)
+    if resource_type == "html":
+        text_data = resource_data.get("text_data", {})
+        content = text_data.get("content", "")
+
+        return Response(
+            content=content,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+            }
+        )
+
     # Handle article resources (fallback for old articles without popup HTML file)
     if resource_type == "article":
         # Get the resource to find linked article
@@ -1633,7 +1646,7 @@ async def get_resource_content(
         for child in children:
             if child.resource_type == ResourceType.PDF:
                 pdf_hash_id = child.hash_id
-            elif child.resource_type == ResourceType.TEXT:
+            elif child.resource_type == ResourceType.HTML:
                 html_hash_id = child.hash_id
 
         # Generate popup HTML on-the-fly

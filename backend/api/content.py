@@ -972,9 +972,9 @@ async def get_article_publication_resources(
     return {
         "article_id": article_id,
         "resources": {
+            "popup_url": f"{base_url}/{resources['popup']}" if resources['popup'] else None,
             "html_url": f"{base_url}/{resources['html']}" if resources['html'] else None,
-            "pdf_url": f"{base_url}/{resources['pdf']}" if resources['pdf'] else None,
-            "markdown_url": f"{base_url}/{resources['markdown']}" if resources['markdown'] else None
+            "pdf_url": f"{base_url}/{resources['pdf']}" if resources['pdf'] else None
         },
         "hash_ids": resources
     }
@@ -1196,4 +1196,113 @@ async def reorder_articles(
     return {
         "message": f"Reordered {len(updated)} articles",
         "updated": updated
+    }
+
+
+# ChromaDB sync endpoints
+
+class ArticleSyncRequest(BaseModel):
+    """Request model for syncing article content to ChromaDB."""
+    article_id: int
+    headline: str
+    content: str
+    topic: str
+    author: Optional[str] = None
+    editor: Optional[str] = None
+    keywords: Optional[str] = None
+    status: str = "published"
+
+
+@router.post("/admin/sync-article")
+async def admin_sync_article_to_chromadb(
+    request: ArticleSyncRequest,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Sync article content to ChromaDB.
+    Used to populate ChromaDB after database migration.
+    """
+    from services.vector_service import VectorService
+    from datetime import datetime
+
+    # Build metadata
+    metadata = {
+        "topic": request.topic,
+        "headline": request.headline,
+        "author": request.author or "",
+        "editor": request.editor or "",
+        "keywords": request.keywords or "",
+        "status": request.status,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
+
+    # Add/update article in ChromaDB
+    success = VectorService.add_article(
+        article_id=request.article_id,
+        headline=request.headline,
+        content=request.content,
+        metadata=metadata
+    )
+
+    if success:
+        logger.info(f"Synced article {request.article_id} to ChromaDB")
+        return {"message": f"Article {request.article_id} synced to ChromaDB", "success": True}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to sync article to ChromaDB"
+        )
+
+
+class BulkArticleSyncRequest(BaseModel):
+    """Request model for bulk syncing articles to ChromaDB."""
+    articles: List[ArticleSyncRequest]
+
+
+@router.post("/admin/sync-articles-bulk")
+async def admin_sync_articles_bulk(
+    request: BulkArticleSyncRequest,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Admin endpoint: Bulk sync multiple articles to ChromaDB.
+    """
+    from services.vector_service import VectorService
+    from datetime import datetime
+
+    results = []
+    for article in request.articles:
+        metadata = {
+            "topic": article.topic,
+            "headline": article.headline,
+            "author": article.author or "",
+            "editor": article.editor or "",
+            "keywords": article.keywords or "",
+            "status": article.status,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+
+        success = VectorService.add_article(
+            article_id=article.article_id,
+            headline=article.headline,
+            content=article.content,
+            metadata=metadata
+        )
+
+        results.append({
+            "article_id": article.article_id,
+            "headline": article.headline[:50],
+            "success": success
+        })
+
+    successful = len([r for r in results if r["success"]])
+    failed = len([r for r in results if not r["success"]])
+
+    return {
+        "message": f"Synced {successful} articles, {failed} failed",
+        "results": results
     }

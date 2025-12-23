@@ -26,6 +26,10 @@ depends_on = None
 
 def upgrade() -> None:
     """Generate popup HTML for existing article resources."""
+    # Commit any pending changes to ensure the 'article' enum value from migration 019 is available
+    # PostgreSQL requires new enum values to be committed before they can be used
+    op.execute("COMMIT")
+
     # Import here to avoid circular imports
     from models import Resource, ResourceType, FileResource, TextResource, ContentArticle, article_resources
     from services.article_resource_service import ArticleResourceService

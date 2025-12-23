@@ -22,6 +22,8 @@ def upgrade() -> None:
     # PostgreSQL ALTER TYPE ADD VALUE cannot run inside a transaction
     # Use IF NOT EXISTS to make it idempotent
     op.execute("ALTER TYPE resource_type_enum ADD VALUE IF NOT EXISTS 'html'")
+    # Commit to ensure the new enum value is visible to subsequent migrations
+    op.execute("COMMIT")
 
 
 def downgrade() -> None:

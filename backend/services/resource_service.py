@@ -676,7 +676,7 @@ class ResourceService:
                     "checksum": resource.file_resource.checksum
                 }
 
-        elif rt == ResourceType.TEXT:
+        elif rt in [ResourceType.TEXT, ResourceType.HTML]:
             if resource.text_resource:
                 result["text_data"] = {
                     "content": resource.text_resource.content,

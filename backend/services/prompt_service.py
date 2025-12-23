@@ -58,19 +58,19 @@ class PromptService:
     def _get_content_agent_template_cached(agent_type: str, template_name: str) -> Optional[str]:
         """
         Internal cached method for content agent templates.
-        Content agent templates are always global (admin-editable only).
+        Content agent templates are stored in PromptModule with prompt_type='content_topic'.
         """
+        from models import PromptModule, PromptType
         db = SessionLocal()
         try:
-            template = db.query(PromptTemplate).filter(
-                PromptTemplate.template_type == 'content_agent',
-                PromptTemplate.agent_type == agent_type,
-                PromptTemplate.template_name == template_name,
-                PromptTemplate.scope == 'global',
-                PromptTemplate.is_active == True
-            ).order_by(PromptTemplate.version.desc()).first()
+            # Query the new PromptModule table for content_topic prompts
+            module = db.query(PromptModule).filter(
+                PromptModule.prompt_type == PromptType.CONTENT_TOPIC,
+                PromptModule.prompt_group == agent_type,
+                PromptModule.is_active == True
+            ).first()
 
-            return template.template_text if template else None
+            return module.template_text if module else None
         finally:
             db.close()
 
@@ -303,6 +303,19 @@ Your task is to create informative, reusable articles (max 1000 words) about ESG
 Use the Google Search tool to research current information.
 Write clearly for a professional audience interested in sustainable investing.
 Include relevant ESG metrics and cite sources.
+Format articles with a clear headline and structured content.""",
+
+            "technical": """You are a technical documentation content creator specializing in:
+- Software architecture and system design
+- API documentation and integration guides
+- Database concepts and data modeling
+- Cloud infrastructure and DevOps practices
+- Security best practices and compliance
+
+Your task is to create informative, reusable technical articles (max 1000 words).
+Use the Google Search tool to research current best practices and documentation.
+Write clearly for a technical audience of developers and engineers.
+Include code examples, diagrams descriptions, and cite official documentation.
 Format articles with a clear headline and structured content."""
         }
 
@@ -317,6 +330,71 @@ Format articles with a clear headline and structured content."""
         with PromptService._cache_lock:
             PromptService._get_main_chat_template_cached.cache_clear()
             PromptService._get_content_agent_template_cached.cache_clear()
+
+
+    @staticmethod
+    def update_prompt_module(
+        db: Session,
+        module_id: int,
+        template_text: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        user_id: Optional[int] = None
+    ) -> dict:
+        """
+        Update a prompt module.
+
+        Args:
+            db: Database session
+            module_id: ID of the module to update
+            template_text: New template text
+            name: Optional new name
+            description: Optional new description
+            is_active: Optional active status
+            user_id: ID of user making the change
+
+        Returns:
+            Updated prompt module dict
+        """
+        from models import PromptModule
+
+        module = db.query(PromptModule).filter(PromptModule.id == module_id).first()
+        if not module:
+            raise ValueError(f"Prompt module {module_id} not found")
+
+        # Update fields
+        module.template_text = template_text
+        if name is not None:
+            module.name = name
+        if description is not None:
+            module.description = description
+        if is_active is not None:
+            module.is_active = is_active
+
+        # Increment version
+        module.version += 1
+
+        db.commit()
+        db.refresh(module)
+
+        # Invalidate cache
+        PromptService.invalidate_cache()
+
+        return {
+            'id': module.id,
+            'name': module.name,
+            'prompt_type': module.prompt_type.value if hasattr(module.prompt_type, 'value') else module.prompt_type,
+            'prompt_group': module.prompt_group,
+            'template_text': module.template_text,
+            'description': module.description,
+            'is_default': module.is_default,
+            'sort_order': module.sort_order,
+            'is_active': module.is_active,
+            'version': module.version,
+            'created_at': module.created_at.isoformat() if module.created_at else None,
+            'updated_at': module.updated_at.isoformat() if module.updated_at else None
+        }
 
     @staticmethod
     def get_prompt_modules(db: Session, prompt_type: Optional[str] = None, prompt_group: Optional[str] = None) -> list:
@@ -389,6 +467,93 @@ Format articles with a clear headline and structured content."""
             for t in tonalities
         ]
 
+    @staticmethod
+    def get_user_tonality_preferences(db: Session, user_id: int) -> Dict:
+        """
+        Get user's tonality preferences for chat and content agents.
+
+        Args:
+            db: Database session
+            user_id: User ID
+
+        Returns:
+            Dict with tonality preferences
+        """
+        from models import User, PromptModule
+
+        user = db.query(User).filter(User.id == user_id).first()
+
+        result = {
+            'chat_tonality_id': None,
+            'chat_tonality_name': None,
+            'content_tonality_id': None,
+            'content_tonality_name': None
+        }
+
+        if user:
+            if user.chat_tonality_id:
+                result['chat_tonality_id'] = user.chat_tonality_id
+                tonality = db.query(PromptModule).filter(PromptModule.id == user.chat_tonality_id).first()
+                if tonality:
+                    result['chat_tonality_name'] = tonality.name
+
+            if user.content_tonality_id:
+                result['content_tonality_id'] = user.content_tonality_id
+                tonality = db.query(PromptModule).filter(PromptModule.id == user.content_tonality_id).first()
+                if tonality:
+                    result['content_tonality_name'] = tonality.name
+
+        return result
+
+    @staticmethod
+    def set_user_tonality(
+        db: Session,
+        user_id: int,
+        chat_tonality_id: Optional[int] = None,
+        content_tonality_id: Optional[int] = None
+    ) -> None:
+        """
+        Set user's tonality preferences.
+
+        Args:
+            db: Database session
+            user_id: User ID
+            chat_tonality_id: ID of chat tonality module (or None to clear)
+            content_tonality_id: ID of content tonality module (or None to clear)
+
+        Raises:
+            ValueError: If tonality IDs are invalid
+        """
+        from models import User, PromptModule, PromptType
+
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+
+        # Validate chat tonality if provided
+        if chat_tonality_id is not None:
+            tonality = db.query(PromptModule).filter(
+                PromptModule.id == chat_tonality_id,
+                PromptModule.prompt_type == PromptType.TONALITY,
+                PromptModule.is_active == True
+            ).first()
+            if not tonality:
+                raise ValueError(f"Invalid chat tonality ID: {chat_tonality_id}")
+
+        # Validate content tonality if provided
+        if content_tonality_id is not None:
+            tonality = db.query(PromptModule).filter(
+                PromptModule.id == content_tonality_id,
+                PromptModule.prompt_type == PromptType.TONALITY,
+                PromptModule.is_active == True
+            ).first()
+            if not tonality:
+                raise ValueError(f"Invalid content tonality ID: {content_tonality_id}")
+
+        user.chat_tonality_id = chat_tonality_id
+        user.content_tonality_id = content_tonality_id
+        db.commit()
+
 
 class PromptValidator:
     """Validate prompt templates before saving."""
@@ -396,20 +561,24 @@ class PromptValidator:
     @staticmethod
     def validate_template(
         template_type: str,
-        agent_type: Optional[str],
-        template_text: str
+        template_text: str,
+        prompt_group: Optional[str] = None
     ) -> tuple[bool, Optional[str]]:
         """
         Validate prompt template.
 
         Args:
-            template_type: Template type ('main_chat' or 'content_agent')
-            agent_type: Agent type (required for content_agent)
+            template_type: Prompt type (tonality, content_topic, etc.)
             template_text: Template text to validate
+            prompt_group: Optional prompt group/topic
 
         Returns:
             Tuple of (is_valid, error_message)
         """
+        # Check template_text is not None
+        if template_text is None:
+            return False, "Template text is required"
+            
         # Check length
         if len(template_text) < 50:
             return False, "Template too short (minimum 50 characters)"
@@ -417,16 +586,13 @@ class PromptValidator:
         if len(template_text) > 8000:
             return False, "Template too long (maximum 8000 characters)"
 
-        # Validate template type
-        if template_type not in ["main_chat", "content_agent"]:
-            return False, "template_type must be 'main_chat' or 'content_agent'"
+        # Valid prompt types
+        valid_types = ["tonality", "content_topic", "general", "chat_specific", "chat_constraint", "article_constraint"]
+        if template_type not in valid_types:
+            return False, f"Invalid template_type. Must be one of: {valid_types}"
 
-        # Validate content agent type
-        if template_type == "content_agent":
-            valid_agent_types = ["macro", "equity", "fixed_income", "esg"]
-            if not agent_type:
-                return False, "agent_type is required for content_agent templates"
-            if agent_type not in valid_agent_types:
-                return False, f"Invalid agent_type for content_agent. Must be one of: {valid_agent_types}"
+        # content_topic requires a prompt_group (topic name)
+        if template_type == "content_topic" and not prompt_group:
+            return False, "prompt_group is required for content_topic templates"
 
         return True, None
