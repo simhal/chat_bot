@@ -45,15 +45,32 @@ TOPICS = [
         "icon": "leaf",
         "color": "#38B2AC",
         "sort_order": 4
+    },
+    {
+        "slug": "technical",
+        "title": "Technical Documentation",
+        "description": "Software architecture, API documentation, and technical guides",
+        "agent_type": "technical",
+        "icon": "code",
+        "color": "#718096",
+        "sort_order": 5
     }
 ]
 
 
 def seed_database():
     """Create initial admin user, topics, and groups"""
+    import sys
+
+    def log(msg):
+        print(msg, flush=True)
+        sys.stdout.flush()
+
+    log("Connecting to database...")
     engine = create_engine(db_settings.database_url)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
+    log("Database connection established.")
 
     try:
         # Create admin group if it doesn't exist (global:admin in new structure)
@@ -66,9 +83,9 @@ def seed_database():
                 description="System administrators with full access"
             )
             db.add(admin_group)
-            print("✓ Created 'global:admin' group")
+            log("✓ Created 'global:admin' group")
         else:
-            print("→ 'global:admin' group already exists")
+            log("→ 'global:admin' group already exists")
 
         # Create topics and their groups
         for topic_data in TOPICS:
@@ -88,9 +105,9 @@ def seed_database():
                 )
                 db.add(topic)
                 db.flush()  # Get the topic ID
-                print(f"✓ Created topic '{topic.slug}'")
+                log(f"✓ Created topic '{topic.slug}'")
             else:
-                print(f"→ Topic '{topic.slug}' already exists")
+                log(f"→ Topic '{topic.slug}' already exists")
 
             # Create 4 groups for this topic
             roles = ["admin", "analyst", "editor", "reader"]
@@ -113,14 +130,14 @@ def seed_database():
                         description=role_descriptions[role]
                     )
                     db.add(group)
-                    print(f"✓ Created '{group_name}' group")
+                    log(f"✓ Created '{group_name}' group")
                 else:
                     # Link existing group to topic if not already linked
                     if not group.topic_id:
                         group.topic_id = topic.id
-                        print(f"→ Linked '{group_name}' group to topic")
+                        log(f"→ Linked '{group_name}' group to topic")
                     else:
-                        print(f"→ '{group_name}' group already exists")
+                        log(f"→ '{group_name}' group already exists")
 
         # Migrate existing articles to link to topics
         # Find articles with legacy 'topic' field but no topic_id
@@ -134,8 +151,8 @@ def seed_database():
                 topic = db.query(Topic).filter(Topic.slug == article.topic).first()
                 if topic:
                     article.topic_id = topic.id
-                    print(f"→ Migrated article {article.id} to topic '{topic.slug}'")
-            print(f"✓ Migrated {len(articles_to_migrate)} articles to topics")
+                    log(f"→ Migrated article {article.id} to topic '{topic.slug}'")
+            log(f"✓ Migrated {len(articles_to_migrate)} articles to topics")
 
         # Create default admin user if it doesn't exist
         admin_email = "simon.haller@gmx.net"
@@ -154,21 +171,21 @@ def seed_database():
 
             # Add user to admin group
             admin_user.groups.append(admin_group)
-            print(f"✓ Created admin user: {admin_email}")
+            log(f"✓ Created admin user: {admin_email}")
         else:
-            print(f"→ Admin user already exists: {admin_email}")
+            log(f"→ Admin user already exists: {admin_email}")
             # Ensure user is in admin group
             if admin_group not in admin_user.groups:
                 admin_user.groups.append(admin_group)
-                print("✓ Added existing user to admin group")
+                log("✓ Added existing user to admin group")
 
         db.commit()
-        print("✓ Database seeding completed successfully")
+        log("✓ Database seeding completed successfully")
         return 0
 
     except Exception as e:
         db.rollback()
-        print(f"✗ Error seeding database: {e}", file=sys.stderr)
+        log(f"✗ Error seeding database: {e}")
         return 1
     finally:
         db.close()

@@ -442,18 +442,8 @@
     }
 
     function getResourceIcon(type: string): string {
-        const icons: Record<string, string> = {
-            'image': '🖼️',
-            'pdf': '📄',
-            'text': '📝',
-            'excel': '📊',
-            'zip': '📦',
-            'csv': '📋',
-            'table': '📑',
-            'timeseries': '📈',
-            'article': '📰'
-        };
-        return icons[type] || '📎';
+        // Icons removed - return empty string
+        return '';
     }
 
     function parseResourceDescription(description: string | null): { desc: string; reference: string; weblink: string; source: string } {

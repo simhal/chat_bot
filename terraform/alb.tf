@@ -8,6 +8,9 @@ resource "aws_lb" "main" {
 
   enable_deletion_protection = false # Set to true for production
 
+  # Increase idle timeout for long-running LLM API calls (default is 60s)
+  idle_timeout = 180
+
   tags = {
     Name = "chatbot-alb"
   }

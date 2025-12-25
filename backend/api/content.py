@@ -498,15 +498,26 @@ async def generate_content(
     # Generate content using the content agent
     try:
         from services.agent_service import AgentService
+        import logging
+        import traceback
+        logger = logging.getLogger("uvicorn")
 
         user_id = int(user.get("sub"))
+        logger.info(f"[CONTENT GENERATE] Topic: {topic}, User: {user_id}, Query: {request.query[:50]}...")
+
         agent_service = AgentService(user_id, db)
 
         # Use the content agent to generate an article
         article = agent_service.generate_content_article(topic, request.query)
+        logger.info(f"[CONTENT GENERATE] Success - Article ID: {article.get('id', 'N/A')}")
 
         return article
     except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger("uvicorn")
+        logger.error(f"[CONTENT GENERATE ERROR] Topic: {topic}, Error: {str(e)}")
+        logger.error(f"[CONTENT GENERATE ERROR] Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating content: {str(e)}"
@@ -650,15 +661,40 @@ Please provide your response as JSON with fields: headline, content, keywords, e
         ]
 
         # Get agent response
-        response = llm.invoke(messages)
-        agent_response = response.content
+        import logging
+        logger = logging.getLogger("uvicorn")
 
-        return {
+        logger.info(f"[ARTICLE CHAT] Invoking LLM for article {article_id}...")
+        # Use async invoke to not block the event loop during long LLM calls
+        response = await llm.ainvoke(messages)
+        agent_response = response.content
+        logger.info(f"[ARTICLE CHAT] LLM response received, length: {len(agent_response)} chars")
+
+        # Truncate response if it's too large (>50KB can cause issues)
+        max_response_len = 50000
+        if len(agent_response) > max_response_len:
+            logger.warning(f"[ARTICLE CHAT] Response too large ({len(agent_response)} chars), truncating to {max_response_len}")
+            agent_response = agent_response[:max_response_len] + "\n\n[Response truncated due to length]"
+
+        # Ensure response is properly encoded (handle any encoding issues)
+        if isinstance(agent_response, str):
+            # Replace any problematic characters
+            agent_response = agent_response.encode('utf-8', errors='replace').decode('utf-8')
+
+        logger.info(f"[ARTICLE CHAT] Building response for article {article_id}...")
+        result = {
             "response": agent_response,
             "article_id": article_id
         }
+        logger.info(f"[ARTICLE CHAT] Returning response for article {article_id}")
+        return result
 
     except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger("uvicorn")
+        logger.error(f"[ARTICLE CHAT ERROR] Article {article_id}: {str(e)}")
+        logger.error(f"[ARTICLE CHAT ERROR] Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error communicating with content agent: {str(e)}"

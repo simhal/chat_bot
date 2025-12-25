@@ -180,6 +180,10 @@ resource "aws_ecs_task_definition" "backend" {
           value = "https://${var.app_subdomain}.${var.domain_name}"
         },
         {
+          name  = "API_BASE_URL"
+          value = "https://${var.app_subdomain}.${var.domain_name}"
+        },
+        {
           name  = "OPENAI_MODEL"
           value = "gpt-4o-mini"
         },

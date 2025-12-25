@@ -485,6 +485,10 @@ async def chat(
             return ChatResponse(response=response_text)
 
     except Exception as e:
+        import traceback
+        logger.error(f"[CHAT ERROR] User: {user.get('sub')}, Message: {chat_message.message[:50]}...")
+        logger.error(f"[CHAT ERROR] Exception: {str(e)}")
+        logger.error(f"[CHAT ERROR] Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error in chatbot: {str(e)}"

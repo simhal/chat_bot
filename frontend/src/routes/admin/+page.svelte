@@ -1,6 +1,6 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getAdminUsers, getAdminGroups, assignGroupToUser, removeGroupFromUser, createGroup, createUser, banUser, unbanUser, deleteUser, getUserInfo, getAdminArticles, deleteArticle, reactivateArticle, recallArticle, purgeArticle, getPromptModules, getTonalities, updatePromptModule, createTonality, deleteTonality, setDefaultTonality, adminGetUserTonality, adminUpdateUserTonality, getGroupResources, getGlobalResources, deleteResource, createTextResource, getTopics, createTopic, updateTopic, deleteTopic, recalculateAllTopicStats, reorderTopics, reorderArticles, editArticle, type PromptModule, type TonalityOption, type TonalityPreferences, type Resource, type ResourceListResponse, type Topic, type TopicCreate, type TopicUpdate } from '$lib/api';
+    import { getAdminUsers, getAdminGroups, assignGroupToUser, removeGroupFromUser, createGroup, createUser, banUser, unbanUser, deleteUser, getUserInfo, getAdminArticles, deleteArticle, reactivateArticle, recallArticle, purgeArticle, getPromptModules, getTonalities, updatePromptModule, createTonality, createContentAgent, deleteTonality, setDefaultTonality, adminGetUserTonality, adminUpdateUserTonality, getGroupResources, getGlobalResources, deleteResource, createTextResource, getTopics, createTopic, updateTopic, deleteTopic, recalculateAllTopicStats, reorderTopics, reorderArticles, editArticle, type PromptModule, type TonalityOption, type TonalityPreferences, type Resource, type ResourceListResponse, type Topic, type TopicCreate, type TopicUpdate } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import ResourceEditor from '$lib/components/ResourceEditor.svelte';
@@ -45,6 +45,14 @@
     let newTonalityTemplate = '';
     let newTonalityDescription = '';
     let newTonalitySaving = false;
+
+    // New content agent form state
+    let showNewContentAgentForm = false;
+    let newContentAgentName = '';
+    let newContentAgentTemplate = '';
+    let newContentAgentDescription = '';
+    let newContentAgentTopic = '';
+    let newContentAgentSaving = false;
 
     // Topic-specific prompt editing
     let topicPrompt: PromptModule | null = null;
@@ -128,6 +136,7 @@
     let editedTopicSearchable = true;
     let editedTopicAccessMainchat = true;
     let editedTopicArticleOrder = 'date';  // 'date', 'priority', 'title'
+    let editedTopicAgentType = '';  // Content agent type: macro, equity, fixed_income, esg, or custom
     let topicSaving = false;
 
     // Topic drag and drop state
@@ -633,6 +642,30 @@
         }
     }
 
+    async function handleCreateContentAgent() {
+        if (!newContentAgentName.trim() || !newContentAgentTemplate.trim() || !newContentAgentTopic) return;
+        try {
+            newContentAgentSaving = true;
+            error = '';
+            await createContentAgent(
+                newContentAgentName.trim(),
+                newContentAgentTemplate.trim(),
+                newContentAgentTopic,
+                newContentAgentDescription.trim() || undefined
+            );
+            await loadPrompts();
+            showNewContentAgentForm = false;
+            newContentAgentName = '';
+            newContentAgentTemplate = '';
+            newContentAgentDescription = '';
+            newContentAgentTopic = '';
+        } catch (e) {
+            error = e instanceof Error ? e.message : 'Failed to create content agent';
+        } finally {
+            newContentAgentSaving = false;
+        }
+    }
+
     async function handleDeleteTonality(moduleId: number, name: string) {
         if (!confirm(`Are you sure you want to delete the tonality "${name}"? This cannot be undone.`)) return;
         try {
@@ -677,6 +710,11 @@
     // Load prompts when switching to prompts view
     $: if (currentView === 'prompts' && prompts.length === 0 && !promptsLoading) {
         loadPrompts();
+    }
+    
+    // Ensure topics are loaded for content agent creation
+    $: if (currentView === 'prompts' && dbTopics.length === 0 && !topicsLoading) {
+        loadTopicsFromDb();
     }
 
     // Topic-specific prompt functions
@@ -830,6 +868,7 @@
         editedTopicSearchable = topic.searchable ?? true;
         editedTopicAccessMainchat = topic.access_mainchat ?? true;
         editedTopicArticleOrder = topic.article_order || 'date';
+        editedTopicAgentType = topic.agent_type || '';
     }
 
     function cancelEditingTopic() {
@@ -850,7 +889,8 @@
                 active: editedTopicActive,
                 searchable: editedTopicSearchable,
                 access_mainchat: editedTopicAccessMainchat,
-                article_order: editedTopicArticleOrder
+                article_order: editedTopicArticleOrder,
+                agent_type: editedTopicAgentType || null
             });
             await loadTopicsFromDb();
             cancelEditingTopic();
@@ -1437,12 +1477,20 @@
             <section class="section prompts-section">
                 <div class="prompts-header">
                     <h2>Prompt Templates</h2>
-                    <button
-                        class="add-tonality-btn"
-                        on:click={() => showNewTonalityForm = true}
-                    >
-                        + New Tonality
-                    </button>
+                    <div class="prompts-header-buttons">
+                        <button
+                            class="add-tonality-btn"
+                            on:click={() => showNewTonalityForm = true}
+                        >
+                            + New Tonality
+                        </button>
+                        <button
+                            class="add-tonality-btn"
+                            on:click={() => showNewContentAgentForm = true}
+                        >
+                            + New Content Agent
+                        </button>
+                    </div>
                 </div>
                 <p class="section-hint">Manage system prompts for the AI chatbot and content generation. Mandatory prompts cannot be deleted.</p>
 
@@ -1895,6 +1943,68 @@
     </div>
 {/if}
 
+<!-- New Content Agent Modal -->
+{#if showNewContentAgentForm}
+    <div class="modal-overlay" on:click={() => showNewContentAgentForm = false}>
+        <div class="modal prompt-modal" on:click|stopPropagation>
+            <h3>Create New Content Agent</h3>
+            <p class="modal-hint">Create a new content agent prompt for a specific topic.</p>
+
+            <div class="prompt-edit-form">
+                <div class="form-group">
+                    <label for="agent-name">Name *</label>
+                    <input
+                        type="text"
+                        id="agent-name"
+                        bind:value={newContentAgentName}
+                        placeholder="e.g., Technical Content Agent"
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label for="agent-topic">Topic *</label>
+                    <select id="agent-topic" bind:value={newContentAgentTopic}>
+                        <option value="">Select a topic...</option>
+                        {#each dbTopics as topic}
+                            <option value={topic.slug}>{topic.name}</option>
+                        {/each}
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="agent-description">Description</label>
+                    <input
+                        type="text"
+                        id="agent-description"
+                        bind:value={newContentAgentDescription}
+                        placeholder="Brief description of this agent"
+                    />
+                </div>
+
+                <div class="form-group">
+                    <label for="agent-template">Template Text *</label>
+                    <textarea
+                        id="agent-template"
+                        bind:value={newContentAgentTemplate}
+                        rows="10"
+                        placeholder="Enter the content agent instructions..."
+                    ></textarea>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button
+                    on:click={handleCreateContentAgent}
+                    disabled={newContentAgentSaving || !newContentAgentName.trim() || !newContentAgentTemplate.trim() || !newContentAgentTopic}
+                >
+                    {newContentAgentSaving ? 'Creating...' : 'Create Content Agent'}
+                </button>
+                <button on:click={() => showNewContentAgentForm = false}>Cancel</button>
+            </div>
+        </div>
+    </div>
+{/if}
+
 <!-- Topic Prompt Modal -->
 {#if showTopicPromptModal}
     <div class="modal-overlay" on:click={closeTopicPromptModal}>
@@ -2100,24 +2210,14 @@
                     ></textarea>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="edit-topic-icon">Icon</label>
-                        <input
-                            id="edit-topic-icon"
-                            type="text"
-                            bind:value={editedTopicIcon}
-                            placeholder="Icon name"
-                        />
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-topic-color">Color</label>
-                        <input
-                            id="edit-topic-color"
-                            type="color"
-                            bind:value={editedTopicColor}
-                        />
-                    </div>
+                <div class="form-group">
+                    <label for="edit-topic-icon">Icon</label>
+                    <input
+                        id="edit-topic-icon"
+                        type="text"
+                        bind:value={editedTopicIcon}
+                        placeholder="Icon name"
+                    />
                 </div>
 
                 <div class="form-group checkboxes">
@@ -2152,6 +2252,19 @@
                     <option value="title">By Title (alphabetical)</option>
                 </select>
                 <span class="help-text">How articles are sorted in listings. Sticky articles always appear first.</span>
+            </div>
+
+            <div class="form-group">
+                <label for="edit-agent-type">Content Agent Type</label>
+                <select id="edit-agent-type" bind:value={editedTopicAgentType}>
+                    <option value="">None (no content agent)</option>
+                    <option value="macro">Macro (macroeconomic analysis)</option>
+                    <option value="equity">Equity (stock market analysis)</option>
+                    <option value="fixed_income">Fixed Income (bond market analysis)</option>
+                    <option value="esg">ESG (sustainability analysis)</option>
+                    <option value="technical">Technical (technical documentation)</option>
+                </select>
+                <span class="help-text">The AI agent used for generating content in this topic. Required for content generation.</span>
             </div>
 
             <div class="modal-actions">
@@ -2236,6 +2349,7 @@
 
     .admin-actions {
         display: flex;
+        align-items: center;
         gap: 0.5rem;
     }
 
@@ -2817,6 +2931,11 @@
         color: #6b7280;
         font-size: 0.875rem;
         margin-bottom: 1.5rem;
+    }
+
+    .prompts-header-buttons {
+        display: flex;
+        gap: 0.5rem;
     }
 
     .add-tonality-btn {

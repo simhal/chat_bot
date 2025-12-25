@@ -465,6 +465,19 @@ export async function createTonality(name: string, templateText: string, descrip
     });
 }
 
+export async function createContentAgent(name: string, templateText: string, promptGroup: string, description?: string, sortOrder?: number) {
+    return apiRequest('/api/prompts/content-agent', {
+        method: 'POST',
+        body: JSON.stringify({
+            name,
+            template_text: templateText,
+            prompt_group: promptGroup,
+            description,
+            sort_order: sortOrder || 99
+        })
+    });
+}
+
 export async function deleteTonality(moduleId: number) {
     return apiRequest(`/api/prompts/${moduleId}`, {
         method: 'DELETE'
@@ -1053,14 +1066,14 @@ export async function getTopicGroups(slug: string): Promise<Array<{ id: number; 
 export interface ArticlePublicationResources {
     article_id: number;
     resources: {
-        html_url: string | null;
-        pdf_url: string | null;
-        markdown_url: string | null;
+        popup_url: string | null;  // Parent ARTICLE resource with popup HTML (shown in navbar)
+        html_url: string | null;   // HTML child resource (standalone HTML version)
+        pdf_url: string | null;    // PDF child resource (downloadable PDF)
     };
     hash_ids: {
+        popup: string | null;
         html: string | null;
         pdf: string | null;
-        markdown: string | null;
     };
 }
 

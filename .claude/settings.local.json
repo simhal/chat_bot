@@ -45,7 +45,23 @@
       "Bash(aws secretsmanager get-secret-value:*)",
       "Bash(MSYS_NO_PATHCONV=1 docker-compose exec:*)",
       "Bash(docker cp:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(terraform plan:*)",
+      "Bash(terraform apply:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws logs describe-log-streams:*)",
+      "Bash(terraform state list:*)",
+      "Bash(terraform state show:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws s3 ls:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws secretsmanager:*)",
+      "Bash(bash:*)",
+      "Bash(MSYS_NO_PATHCONV=1 aws logs filter-log-events:*)",
+      "Bash(./build-and-push.sh)",
+      "Bash(aws elbv2 describe-target-health:*)",
+      "Bash(aws elasticache describe-cache-clusters:*)",
+      "Bash(uv run python:*)",
+      "Bash(timeout 30 uv run:*)",
+      "Bash(aws ecr describe-repositories:*)",
+      "Bash(aws ecs list-clusters:*)"
     ]
   }
 }
