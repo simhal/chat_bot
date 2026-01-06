@@ -95,8 +95,10 @@ def test_engine():
 
     yield engine
 
-    # Cleanup
-    Base.metadata.drop_all(bind=engine)
+    # Cleanup - skip drop_all for PostgreSQL to avoid constraint name issues
+    # (PostgreSQL test container uses tmpfs and will be destroyed anyway)
+    if "sqlite" in database_url:
+        Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
 
@@ -165,7 +167,13 @@ def client(override_get_db, mock_redis) -> Generator[TestClient, None, None]:
 
 @pytest.fixture(scope="function")
 def test_user(db_session) -> User:
-    """Create a basic test user with reader access."""
+    """Get or create a basic test user with reader access."""
+    # Try to get existing seeded user first
+    user = db_session.query(User).filter(User.email == "reader@test.com").first()
+    if user:
+        return user
+
+    # Fallback: create user (for SQLite in-memory tests without seeding)
     user = User(
         email="reader@test.com",
         name="Test",
@@ -180,7 +188,13 @@ def test_user(db_session) -> User:
 
 @pytest.fixture(scope="function")
 def test_analyst(db_session, test_topic) -> User:
-    """Create a test user with analyst role."""
+    """Get or create a test user with analyst role."""
+    # Try to get existing seeded user first
+    user = db_session.query(User).filter(User.email == "analyst@test.com").first()
+    if user:
+        return user
+
+    # Fallback: create user (for SQLite in-memory tests without seeding)
     user = User(
         email="analyst@test.com",
         name="Test",
@@ -191,24 +205,34 @@ def test_analyst(db_session, test_topic) -> User:
     db_session.add(user)
     db_session.flush()
 
-    # Create analyst group for topic
-    group = Group(
-        name=f"{test_topic.slug}:analyst",
-        groupname=test_topic.slug,
-        role="analyst",
-        topic_id=test_topic.id,
-    )
-    db_session.add(group)
-    db_session.flush()
+    # Get or create analyst group for topic
+    group_name = f"{test_topic.slug}:analyst"
+    group = db_session.query(Group).filter(Group.name == group_name).first()
+    if not group:
+        group = Group(
+            name=group_name,
+            groupname=test_topic.slug,
+            role="analyst",
+            topic_id=test_topic.id,
+        )
+        db_session.add(group)
+        db_session.flush()
 
-    user.groups.append(group)
-    db_session.flush()
+    if group not in user.groups:
+        user.groups.append(group)
+        db_session.flush()
     return user
 
 
 @pytest.fixture(scope="function")
 def test_editor(db_session, test_topic) -> User:
-    """Create a test user with editor role."""
+    """Get or create a test user with editor role."""
+    # Try to get existing seeded user first
+    user = db_session.query(User).filter(User.email == "editor@test.com").first()
+    if user:
+        return user
+
+    # Fallback: create user (for SQLite in-memory tests without seeding)
     user = User(
         email="editor@test.com",
         name="Test",
@@ -219,24 +243,34 @@ def test_editor(db_session, test_topic) -> User:
     db_session.add(user)
     db_session.flush()
 
-    # Create editor group for topic
-    group = Group(
-        name=f"{test_topic.slug}:editor",
-        groupname=test_topic.slug,
-        role="editor",
-        topic_id=test_topic.id,
-    )
-    db_session.add(group)
-    db_session.flush()
+    # Get or create editor group for topic
+    group_name = f"{test_topic.slug}:editor"
+    group = db_session.query(Group).filter(Group.name == group_name).first()
+    if not group:
+        group = Group(
+            name=group_name,
+            groupname=test_topic.slug,
+            role="editor",
+            topic_id=test_topic.id,
+        )
+        db_session.add(group)
+        db_session.flush()
 
-    user.groups.append(group)
-    db_session.flush()
+    if group not in user.groups:
+        user.groups.append(group)
+        db_session.flush()
     return user
 
 
 @pytest.fixture(scope="function")
 def test_admin(db_session) -> User:
-    """Create a test user with global admin role."""
+    """Get or create a test user with global admin role."""
+    # Try to get existing seeded user first
+    user = db_session.query(User).filter(User.email == "admin@test.com").first()
+    if user:
+        return user
+
+    # Fallback: create user (for SQLite in-memory tests without seeding)
     user = User(
         email="admin@test.com",
         name="Test",
@@ -247,17 +281,20 @@ def test_admin(db_session) -> User:
     db_session.add(user)
     db_session.flush()
 
-    # Create global admin group
-    group = Group(
-        name="global:admin",
-        groupname="global",
-        role="admin",
-    )
-    db_session.add(group)
-    db_session.flush()
+    # Get or create global admin group
+    group = db_session.query(Group).filter(Group.name == "global:admin").first()
+    if not group:
+        group = Group(
+            name="global:admin",
+            groupname="global",
+            role="admin",
+        )
+        db_session.add(group)
+        db_session.flush()
 
-    user.groups.append(group)
-    db_session.flush()
+    if group not in user.groups:
+        user.groups.append(group)
+        db_session.flush()
     return user
 
 
@@ -331,10 +368,20 @@ def admin_headers(admin_token) -> dict:
 
 @pytest.fixture(scope="function")
 def test_topic(db_session) -> Topic:
-    """Create a test topic."""
+    """Get or create the 'macro' topic for testing.
+
+    Uses 'macro' to match seeded test data for PostgreSQL tests.
+    Falls back to creating topic for SQLite in-memory tests.
+    """
+    # Try to get existing seeded topic first
+    topic = db_session.query(Topic).filter(Topic.slug == "macro").first()
+    if topic:
+        return topic
+
+    # Fallback: create topic (for SQLite in-memory tests without seeding)
     topic = Topic(
-        slug="test_topic",
-        title="Test Topic",
+        slug="macro",
+        title="Macroeconomic Research",
         description="A topic for testing",
         visible=True,
         searchable=True,

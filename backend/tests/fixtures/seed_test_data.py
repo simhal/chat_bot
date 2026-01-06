@@ -44,82 +44,91 @@ def seed_test_data(database_url: str = None):
     with SessionLocal() as db:
         print("Seeding test data...")
 
-        # Check if data already exists
+        # Check if test users already exist (full seeding already done)
         existing_user = db.query(User).filter(User.email == "reader@test.com").first()
         if existing_user:
             print("Test data already exists, skipping seed.")
             return
 
         # =================================================================
-        # CREATE TOPICS
+        # GET OR CREATE TOPICS
         # =================================================================
-        print("Creating topics...")
+        print("Creating/updating topics...")
 
-        topics = {
-            "macro": Topic(
-                slug="macro",
-                title="Macroeconomic Research",
-                description="Analysis of macroeconomic trends, GDP, inflation, and monetary policy",
-                visible=True,
-                searchable=True,
-                active=True,
-                sort_order=1,
-                article_order="date",
-            ),
-            "equity": Topic(
-                slug="equity",
-                title="Equity Research",
-                description="Stock analysis, valuations, sector trends, and earnings",
-                visible=True,
-                searchable=True,
-                active=True,
-                sort_order=2,
-                article_order="date",
-            ),
-            "fixed_income": Topic(
-                slug="fixed_income",
-                title="Fixed Income Research",
-                description="Bond analysis, yields, credit spreads, and duration strategies",
-                visible=True,
-                searchable=True,
-                active=True,
-                sort_order=3,
-                article_order="date",
-            ),
+        topic_data = {
+            "macro": {
+                "title": "Macroeconomic Research",
+                "description": "Analysis of macroeconomic trends, GDP, inflation, and monetary policy",
+                "sort_order": 1,
+            },
+            "equity": {
+                "title": "Equity Research",
+                "description": "Stock analysis, valuations, sector trends, and earnings",
+                "sort_order": 2,
+            },
+            "fixed_income": {
+                "title": "Fixed Income Research",
+                "description": "Bond analysis, yields, credit spreads, and duration strategies",
+                "sort_order": 3,
+            },
         }
 
-        for topic in topics.values():
-            db.add(topic)
+        topics = {}
+        for slug, data in topic_data.items():
+            topic = db.query(Topic).filter(Topic.slug == slug).first()
+            if not topic:
+                topic = Topic(
+                    slug=slug,
+                    title=data["title"],
+                    description=data["description"],
+                    visible=True,
+                    searchable=True,
+                    active=True,
+                    sort_order=data["sort_order"],
+                    article_order="date",
+                )
+                db.add(topic)
+            topics[slug] = topic
         db.flush()
 
         # =================================================================
-        # CREATE GROUPS
+        # GET OR CREATE GROUPS
         # =================================================================
-        print("Creating groups...")
+        print("Creating/updating groups...")
 
         groups = {}
 
         # Global admin group
-        groups["global:admin"] = Group(
-            name="global:admin",
-            groupname="global",
-            role="admin",
-            description="Global administrators with full system access",
-        )
-        db.add(groups["global:admin"])
+        group = db.query(Group).filter(Group.name == "global:admin").first()
+        if not group:
+            group = Group(
+                name="global:admin",
+                groupname="global",
+                role="admin",
+                description="Global administrators with full system access",
+            )
+            db.add(group)
+        groups["global:admin"] = group
 
         # Topic-specific groups
         for slug, topic in topics.items():
             for role in ["admin", "analyst", "editor", "reader"]:
                 group_name = f"{slug}:{role}"
-                groups[group_name] = Group(
-                    name=group_name,
-                    groupname=slug,
-                    role=role,
-                    description=f"{role.title()} access for {topic.title}",
-                    topic_id=topic.id,
-                )
-                db.add(groups[group_name])
+                group = db.query(Group).filter(Group.name == group_name).first()
+                if not group:
+                    group = Group(
+                        name=group_name,
+                        groupname=slug,
+                        role=role,
+                        description=f"{role.title()} access for {topic.title}",
+                        topic_id=topic.id,
+                    )
+                    db.add(group)
+                else:
+                    # Update topic_id if missing (migration may have created without it)
+                    if group.topic_id is None:
+                        group.topic_id = topic.id
+                groups[group_name] = group
 
         db.flush()
 

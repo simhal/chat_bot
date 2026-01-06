@@ -225,6 +225,10 @@ function Run-BackendTests {
         Write-Host "Running database migrations..."
         uv run alembic upgrade head
 
+        # Seed test data (creates topics, users, etc. that tests depend on)
+        Write-Host "Seeding test data..."
+        uv run python -c "from tests.fixtures.seed_test_data import seed_test_data; seed_test_data()"
+
         # Run tests
         Write-Host ""
         Write-Host "Running pytest..."
@@ -259,8 +263,14 @@ function Run-FrontendUnitTests {
     Push-Location "$ProjectRoot\frontend"
 
     try {
-        Write-Host "Installing frontend dependencies..."
-        npm ci
+        # Install dependencies if needed (skip if node_modules exists to avoid engine version issues)
+        if (-not (Test-Path "node_modules")) {
+            Write-Host "Installing frontend dependencies..."
+            npm install --ignore-engines 2>$null
+            if ($LASTEXITCODE -ne 0) { npm ci }
+        } else {
+            Write-Host "Using existing node_modules..."
+        }
 
         Write-Host "Running vitest..."
         if ($Coverage) {
@@ -294,7 +304,8 @@ function Run-E2ETests {
         # Install dependencies if not already done
         if (-not (Test-Path "node_modules")) {
             Write-Host "Installing frontend dependencies..."
-            npm ci
+            npm install --ignore-engines 2>$null
+            if ($LASTEXITCODE -ne 0) { npm ci }
         }
 
         Write-Host "Installing Playwright browsers..."

@@ -191,7 +191,8 @@ class TestAnalystEndpoints:
         # May return 200 (success) or 500 (if topic validation fails)
         if response.status_code == 200:
             data = response.json()
-            assert data["status"] == "editor"
+            # Response format: {"message": "...", "article": {...}}
+            assert data["article"]["status"] == "editor"
         else:
             assert response.status_code in [200, 500]
 
@@ -230,7 +231,8 @@ class TestEditorEndpoints:
         # May return 200 (success) or 500 (if topic validation fails)
         if response.status_code == 200:
             data = response.json()
-            assert data["status"] == "draft"
+            # Response format: {"message": "...", "article": {...}}
+            assert data["article"]["status"] == "draft"
         else:
             assert response.status_code in [200, 500]
 

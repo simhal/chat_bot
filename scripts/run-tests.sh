@@ -271,6 +271,10 @@ run_backend_tests() {
     echo "Running database migrations..."
     uv run alembic upgrade head
 
+    # Seed test data (creates topics, users, etc. that tests depend on)
+    echo "Seeding test data..."
+    uv run python -c "from tests.fixtures.seed_test_data import seed_test_data; seed_test_data()"
+
     # Run tests
     echo ""
     echo "Running pytest..."
@@ -299,9 +303,13 @@ run_frontend_unit_tests() {
 
     cd "$PROJECT_ROOT/frontend"
 
-    # Install dependencies
-    echo "Installing frontend dependencies..."
-    npm ci
+    # Install dependencies if needed (skip if node_modules exists to avoid engine version issues)
+    if [ ! -d "node_modules" ]; then
+        echo "Installing frontend dependencies..."
+        npm install --ignore-engines 2>/dev/null || npm ci
+    else
+        echo "Using existing node_modules..."
+    fi
 
     # Run vitest
     echo "Running vitest..."
@@ -333,7 +341,7 @@ run_e2e_tests() {
     # Install dependencies if not already done
     if [ ! -d "node_modules" ]; then
         echo "Installing frontend dependencies..."
-        npm ci
+        npm install --ignore-engines 2>/dev/null || npm ci
     fi
 
     # Install Playwright browsers if needed
