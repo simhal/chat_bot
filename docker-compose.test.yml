@@ -1,0 +1,242 @@
+# Docker Compose configuration for isolated test environment
+# All containers start fresh with no persistent data
+# Usage: docker-compose -f docker-compose.test.yml up -d
+
+services:
+  # PostgreSQL test database - starts clean each run
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: chatbot-postgres-test
+    environment:
+      POSTGRES_DB: chatbot_test
+      POSTGRES_USER: chatbot_test_user
+      POSTGRES_PASSWORD: chatbot_test_password
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbot_test_user -d chatbot_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No volumes - fresh database each time
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  # Redis test instance - starts clean each run
+  redis-test:
+    image: redis:7-alpine
+    container_name: chatbot-redis-test
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No persistence
+    command: redis-server --appendonly no --save ""
+
+  # ChromaDB test instance - starts clean each run
+  chroma-test:
+    image: chromadb/chroma:latest
+    container_name: chatbot-chroma-test
+    environment:
+      IS_PERSISTENT: "FALSE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No persistence - in-memory mode
+
+  # Backend test runner
+  backend-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatbot-backend-test
+    environment:
+      # Test database
+      DATABASE_URL: postgresql://chatbot_test_user:chatbot_test_password@postgres-test:5432/chatbot_test
+      # Test Redis
+      REDIS_URL: redis://redis-test:6379/0
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      # Test ChromaDB
+      CHROMA_HOST: chroma-test
+      CHROMA_PORT: 8000
+      # Celery test config
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/2
+      # JWT test secret
+      JWT_SECRET_KEY: test-secret-key-for-testing-only-not-for-production
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      REFRESH_TOKEN_EXPIRE_DAYS: 1
+      # CORS for tests
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      # OpenAI - use mock or real key for integration tests
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      OPENAI_MODEL: gpt-4o-mini
+      # Test mode flag
+      TESTING: "true"
+      PYTHONPATH: /app
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+      - test_uploads:/app/uploads
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      chroma-test:
+        condition: service_healthy
+    command: >
+      sh -c "
+        uv run alembic upgrade head &&
+        uv run pytest tests/ -v --tb=short
+      "
+    profiles:
+      - test
+
+  # Backend API server for E2E tests
+  backend-e2e:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatbot-backend-e2e
+    environment:
+      DATABASE_URL: postgresql://chatbot_test_user:chatbot_test_password@postgres-test:5432/chatbot_test
+      REDIS_URL: redis://redis-test:6379/0
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      CHROMA_HOST: chroma-test
+      CHROMA_PORT: 8000
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/2
+      JWT_SECRET_KEY: test-secret-key-for-testing-only-not-for-production
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      REFRESH_TOKEN_EXPIRE_DAYS: 1
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173,http://frontend-test:3000
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      OPENAI_MODEL: gpt-4o-mini
+      TESTING: "true"
+      PYTHONPATH: /app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - test_uploads:/app/uploads
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      chroma-test:
+        condition: service_healthy
+    command: >
+      sh -c "
+        uv run alembic upgrade head &&
+        uv run python -c \"from tests.fixtures.seed_test_data import seed_test_data; seed_test_data()\" &&
+        uv run uvicorn main:app --host 0.0.0.0 --port 8000
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    profiles:
+      - e2e
+
+  # Celery worker for E2E tests
+  celery-worker-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatbot-celery-worker-test
+    environment:
+      DATABASE_URL: postgresql://chatbot_test_user:chatbot_test_password@postgres-test:5432/chatbot_test
+      REDIS_URL: redis://redis-test:6379/0
+      REDIS_HOST: redis-test
+      REDIS_PORT: 6379
+      CHROMA_HOST: chroma-test
+      CHROMA_PORT: 8000
+      CELERY_BROKER_URL: redis://redis-test:6379/1
+      CELERY_RESULT_BACKEND: redis://redis-test:6379/2
+      JWT_SECRET_KEY: test-secret-key-for-testing-only-not-for-production
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-test-key}
+      OPENAI_MODEL: gpt-4o-mini
+      TESTING: "true"
+      PYTHONPATH: /app
+    volumes:
+      - ./backend:/app
+      - test_uploads:/app/uploads
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    command: uv run celery -A celery_app worker -Q default,analyst,research,articles,editor -l info --concurrency=1
+    profiles:
+      - e2e
+
+  # Frontend E2E test runner
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chatbot-frontend-test
+    environment:
+      PUBLIC_API_URL: http://backend-e2e:8000
+      PUBLIC_LINKEDIN_CLIENT_ID: test-client-id
+      PUBLIC_LINKEDIN_REDIRECT_URI: http://localhost:3000/auth/callback
+      NODE_ENV: test
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend-e2e:
+        condition: service_healthy
+    profiles:
+      - e2e
+
+  # Playwright test runner
+  playwright-test:
+    image: mcr.microsoft.com/playwright:v1.45.0-jammy
+    container_name: chatbot-playwright-test
+    working_dir: /app
+    environment:
+      BASE_URL: http://frontend-test:3000
+      API_URL: http://backend-e2e:8000
+      CI: "true"
+    volumes:
+      - ./frontend:/app
+      - playwright_results:/app/test-results
+      - playwright_reports:/app/playwright-report
+    depends_on:
+      frontend-test:
+        condition: service_started
+      backend-e2e:
+        condition: service_healthy
+    command: >
+      sh -c "
+        npm ci &&
+        npx playwright install chromium &&
+        npx playwright test --reporter=html
+      "
+    profiles:
+      - e2e
+
+volumes:
+  test_uploads:
+  playwright_results:
+  playwright_reports:
+
+networks:
+  default:
+    name: chatbot-test-network
