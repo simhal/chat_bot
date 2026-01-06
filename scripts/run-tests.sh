@@ -112,6 +112,10 @@ start_base_containers() {
 
     cd "$PROJECT_ROOT"
 
+    # Stop and remove existing test containers to ensure fresh data
+    echo "Removing existing test containers..."
+    docker-compose -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
+
     local BUILD_ARG=""
     if [ "$NO_BUILD" = false ]; then
         BUILD_ARG="--build"

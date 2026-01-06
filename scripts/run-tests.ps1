@@ -49,6 +49,10 @@ function Start-BaseContainers {
     Push-Location $ProjectRoot
 
     try {
+        # Stop and remove existing test containers to ensure fresh data
+        Write-Host "Removing existing test containers..."
+        docker-compose -f docker-compose.test.yml down -v --remove-orphans 2>$null
+
         $buildArg = if (-not $NoBuild) { "--build" } else { "" }
 
         docker-compose -f docker-compose.test.yml up -d $buildArg postgres-test redis-test chroma-test
