@@ -377,3 +377,12 @@ Cross-Origin Resource Sharing (CORS) restricts which domains can call the API:
 | **Backend Middleware** | Validates tokens on protected endpoints |
 | **Redis Cache** | Token registry for revocation support |
 | **PostgreSQL** | User records, group memberships, audit logs |
+
+---
+
+## Related Documentation
+
+- [Authorization](./02-authorization_concept.md) - Permission system and role hierarchy
+- [User Management](./04-user-management.md) - User accounts and groups
+- [Redis Cache](./12-redis-cache.md) - Token registry details
+- [Architecture Diagrams](./diagrams/authentication-flow.mmd) - OAuth sequence diagram

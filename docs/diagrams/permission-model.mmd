@@ -1,0 +1,49 @@
+%%{init: {'theme': 'base'}}%%
+graph TD
+    subgraph Global["Global Scope"]
+        GA[global:admin]
+    end
+
+    subgraph Topic_Macro["Macro Topic"]
+        MA[macro:admin]
+        ME[macro:editor]
+        MAN[macro:analyst]
+        MR[macro:reader]
+    end
+
+    subgraph Topic_Equity["Equity Topic"]
+        EA[equity:admin]
+        EE[equity:editor]
+        EAN[equity:analyst]
+        ER[equity:reader]
+    end
+
+    subgraph Topic_FI["Fixed Income Topic"]
+        FA[fixed_income:admin]
+        FE[fixed_income:editor]
+        FAN[fixed_income:analyst]
+        FR[fixed_income:reader]
+    end
+
+    GA -->|"Full Access"| MA
+    GA -->|"Full Access"| EA
+    GA -->|"Full Access"| FA
+
+    MA -->|"Includes"| ME
+    ME -->|"Includes"| MAN
+    MAN -->|"Includes"| MR
+
+    EA -->|"Includes"| EE
+    EE -->|"Includes"| EAN
+    EAN -->|"Includes"| ER
+
+    FA -->|"Includes"| FE
+    FE -->|"Includes"| FAN
+    FAN -->|"Includes"| FR
+
+    subgraph Legend["Role Capabilities"]
+        L_Admin["Admin: Full topic control, user management"]
+        L_Editor["Editor: Publish/reject articles"]
+        L_Analyst["Analyst: Create/edit articles, resources"]
+        L_Reader["Reader: View published articles"]
+    end

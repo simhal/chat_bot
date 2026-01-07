@@ -1,13 +1,16 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { sendChatMessage, getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle, getTopics, getArticlePublicationResources, getPublishedArticleHtmlUrl, getPublishedArticlePdfUrl, type Topic as TopicType, type ArticlePublicationResources } from '$lib/api';
+    import { getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle, getTopics, getArticlePublicationResources, getPublishedArticleHtmlUrl, getPublishedArticlePdfUrl, type Topic as TopicType, type ArticlePublicationResources } from '$lib/api';
     import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI } from '$env/static/public';
     import Markdown from '$lib/components/Markdown.svelte';
-    import { onMount, tick } from 'svelte';
+    import { onMount, onDestroy, tick } from 'svelte';
     import { browser } from '$app/environment';
     import { page } from '$app/stores';
+    import { goto } from '$app/navigation';
+    import { navigationContext } from '$lib/stores/navigation';
+    import { actionStore, type UIAction, type ActionResult } from '$lib/stores/actions';
 
-    // Tab is now dynamic - 'chat', 'search', or any topic slug
+    // Tab is now dynamic - 'search', or any topic slug (chat removed - now in split pane)
     type Tab = string;
 
     interface Article {
@@ -25,10 +28,7 @@
         user_rating?: number | null;
     }
 
-    let currentTab: Tab = 'chat';
-    let messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-    let inputMessage = '';
-    let loading = false;
+    let currentTab: Tab = 'search';  // Default to search, will update when topics load
     let error = '';
 
     // Articles state
@@ -58,8 +58,8 @@
     let topicsLoading = false;
     let topicsLoadedForUser: string | null = null; // Track which user we loaded topics for
 
-    // Dynamic valid tabs based on loaded topics
-    $: validTabs = ['chat', 'search', ...dbTopics.filter(t => t.visible && t.active).map(t => t.slug)];
+    // Dynamic valid tabs based on loaded topics (chat removed - now in split pane)
+    $: validTabs = ['search', ...dbTopics.filter(t => t.visible && t.active).map(t => t.slug)];
 
     async function loadTopicsFromDb() {
         if (topicsLoading) return; // Prevent concurrent loads
@@ -88,8 +88,14 @@
     }
 
     function initiateLinkedInLogin() {
-        const state = Math.random().toString(36).substring(7);
+        // Generate cryptographically secure state for CSRF protection
+        const state = crypto.randomUUID();
         const scope = 'openid profile email';
+
+        // Store state in sessionStorage for validation on callback
+        if (browser) {
+            sessionStorage.setItem('oauth_state', state);
+        }
 
         const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
         authUrl.searchParams.set('response_type', 'code');
@@ -99,34 +105,6 @@
         authUrl.searchParams.set('state', state);
 
         window.location.href = authUrl.toString();
-    }
-
-    async function sendMessage() {
-        if (!inputMessage.trim() || loading) return;
-
-        const userMessage = inputMessage.trim();
-        inputMessage = '';
-        error = '';
-
-        messages = [...messages, { role: 'user', content: userMessage }];
-        loading = true;
-
-        try {
-            const response = await sendChatMessage(userMessage);
-            messages = [...messages, { role: 'assistant', content: response.response }];
-        } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to send message';
-            console.error('Error sending message:', e);
-        } finally {
-            loading = false;
-        }
-    }
-
-    function handleKeyPress(event: KeyboardEvent) {
-        if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
-            sendMessage();
-        }
     }
 
     async function loadArticles(topic: string) {
@@ -145,11 +123,14 @@
     async function handleArticleClick(article: Article) {
         try {
             // Fetch full article to increment readership
-            selectedArticle = await getArticle(article.id);
+            selectedArticle = await getArticle(article.topic, article.id);
+
+            // Update navigation context with article focus
+            navigationContext.setArticle(selectedArticle.id, selectedArticle.headline, selectedArticle.keywords, 'published');
 
             // Fetch publication resources for published articles
             try {
-                selectedArticleResources = await getArticlePublicationResources(article.id);
+                selectedArticleResources = await getArticlePublicationResources(article.topic, article.id);
             } catch (e) {
                 // May not have resources yet (older articles) - that's OK
                 selectedArticleResources = null;
@@ -159,13 +140,26 @@
         }
     }
 
-    function handleTabChange(tab: Tab) {
+    function handleTabChange(tab: Tab, updateUrl: boolean = true) {
         currentTab = tab;
         selectedArticle = null;
         selectedArticleResources = null;
 
-        // Load articles for the selected topic (but not for chat or search)
-        if (tab !== 'chat' && tab !== 'search') {
+        // Update URL to keep Header navbar in sync
+        if (updateUrl && browser) {
+            goto(`/?tab=${tab}`, { replaceState: true, noScroll: true });
+        }
+
+        // Update navigation context for the chat panel
+        if (tab === 'search') {
+            navigationContext.setContext({ section: 'search', topic: null, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
+        } else {
+            // It's a topic slug
+            navigationContext.setContext({ section: 'home', topic: tab, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
+        }
+
+        // Load articles for the selected topic (but not for search)
+        if (tab !== 'search') {
             loadArticles(tab);
         }
 
@@ -179,10 +173,10 @@
         return new Date(dateString).toLocaleDateString();
     }
 
-    async function handleDownloadPDF(articleId: number) {
+    async function handleDownloadPDF(topic: string, articleId: number) {
         try {
             error = '';
-            await downloadArticlePDF(articleId);
+            await downloadArticlePDF(topic, articleId);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to download PDF';
         }
@@ -199,11 +193,11 @@
 
         try {
             error = '';
-            await rateArticle(selectedArticle.id, userRating);
+            await rateArticle(selectedArticle.topic, selectedArticle.id, userRating);
             showRatingModal = false;
 
             // Reload the article to get updated rating
-            selectedArticle = await getArticle(selectedArticle.id);
+            selectedArticle = await getArticle(selectedArticle.topic, selectedArticle.id);
 
             // Also reload the articles list for the current tab
             if (currentTab !== 'chat' && currentTab !== 'search') {
@@ -262,15 +256,24 @@
         const tabParam = urlParams.get('tab') as Tab | null;
         const hash = window.location.hash;
 
-        // Switch to tab if specified in URL, otherwise default to chat
+        // Switch to tab if specified in URL, otherwise default to first topic or search
         if (tabParam && validTabs.includes(tabParam)) {
             currentTab = tabParam;
         } else {
-            currentTab = 'chat';
+            // Default to first topic if available, otherwise search
+            const visibleTopics = dbTopics.filter(t => t.visible && t.active);
+            currentTab = visibleTopics.length > 0 ? visibleTopics[0].slug : 'search';
         }
 
-        // Load articles for the current tab (but not for chat or search)
-        if (currentTab !== 'chat' && currentTab !== 'search') {
+        // Update navigation context
+        if (currentTab === 'search') {
+            navigationContext.setContext({ section: 'search', topic: null, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
+        } else {
+            navigationContext.setContext({ section: 'home', topic: currentTab, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
+        }
+
+        // Load articles for the current tab (but not for search)
+        if (currentTab !== 'search') {
             await loadArticles(currentTab);
         }
 
@@ -301,10 +304,324 @@
         handleDeepLink();
     }
 
+    // Action handlers for chat-triggered UI actions
+    let actionUnsubscribers: (() => void)[] = [];
+
+    async function handleSelectTopicTabAction(action: UIAction): Promise<ActionResult> {
+        const topic = action.params?.topic;
+        if (!topic) {
+            return { success: false, action: 'select_topic_tab', error: 'No topic specified' };
+        }
+        handleTabChange(topic);
+        return { success: true, action: 'select_topic_tab', message: `Switched to ${topic} tab` };
+    }
+
+    async function handleSelectTopicAction(action: UIAction): Promise<ActionResult> {
+        const topic = action.params?.topic;
+        if (!topic) {
+            return { success: false, action: 'select_topic', error: 'No topic specified' };
+        }
+        handleTabChange(topic);
+        return { success: true, action: 'select_topic', message: `Switched to ${topic} topic` };
+    }
+
+    async function handleSearchArticlesAction(action: UIAction): Promise<ActionResult> {
+        const query = action.params?.search_query;
+        if (!query) {
+            return { success: false, action: 'search_articles', error: 'No search query specified' };
+        }
+        // Set search parameters and switch to search tab
+        searchParams.q = query;
+        currentTab = 'search';
+        await handleSearch();
+        return { success: true, action: 'search_articles', message: `Searching for: ${query}` };
+    }
+
+    async function handleClearSearchAction(action: UIAction): Promise<ActionResult> {
+        handleClearSearch();
+        return { success: true, action: 'clear_search', message: 'Search cleared' };
+    }
+
+    async function handleOpenArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'open_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'open_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            const article = await getArticle(topic, articleId);
+            await handleArticleClick(article);
+            return { success: true, action: 'open_article', message: `Opened article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'open_article', error: e instanceof Error ? e.message : 'Failed to open article' };
+        }
+    }
+
+    async function handleRateArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        const rating = action.params?.rating;
+
+        if (!selectedArticle && articleId) {
+            // Get topic from params, or from loaded articles, or from current tab
+            const topic = action.params?.topic ||
+                articles.find(a => a.id === articleId)?.topic ||
+                searchResults.find(a => a.id === articleId)?.topic ||
+                (currentTab !== 'search' ? currentTab : null);
+            if (!topic) {
+                return { success: false, action: 'rate_article', error: 'Cannot determine article topic' };
+            }
+            try {
+                selectedArticle = await getArticle(topic, articleId);
+            } catch (e) {
+                return { success: false, action: 'rate_article', error: 'Article not found' };
+            }
+        }
+
+        if (!selectedArticle) {
+            return { success: false, action: 'rate_article', error: 'No article selected' };
+        }
+
+        if (rating) {
+            userRating = rating;
+            await handleRateArticle();
+            return { success: true, action: 'rate_article', message: `Rated article ${rating} stars` };
+        } else {
+            openRatingModal(selectedArticle);
+            return { success: true, action: 'rate_article', message: 'Rating dialog opened' };
+        }
+    }
+
+    async function handleDownloadPdfAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'download_pdf', error: 'No article ID specified' };
+        }
+        // Get topic from params, selectedArticle, loaded articles, or current tab
+        const topic = action.params?.topic ||
+            selectedArticle?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'download_pdf', error: 'Cannot determine article topic' };
+        }
+        try {
+            await handleDownloadPDF(topic, articleId);
+            return { success: true, action: 'download_pdf', message: `PDF downloaded for article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'download_pdf', error: e instanceof Error ? e.message : 'Failed to download PDF' };
+        }
+    }
+
+    async function handleCloseModalAction(action: UIAction): Promise<ActionResult> {
+        selectedArticle = null;
+        showRatingModal = false;
+        navigationContext.clearArticle();
+        return { success: true, action: 'close_modal', message: 'Modal closed' };
+    }
+
+    async function handleSelectArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'select_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'select_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            const article = await getArticle(topic, articleId);
+            // Update navigation context with article focus (without opening modal)
+            navigationContext.setArticle(article.id, article.headline, article.keywords, 'published');
+            return { success: true, action: 'select_article', message: `Focused on article #${articleId}: ${article.headline}`, data: { article_id: article.id, headline: article.headline } };
+        } catch (e) {
+            return { success: false, action: 'select_article', error: e instanceof Error ? e.message : `Article #${articleId} not found` };
+        }
+    }
+
+    async function handleEditArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'edit_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'edit_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            // Fetch the article to get its details and update context before navigating
+            const article = await getArticle(topic, articleId);
+            const topicSlug = article.topic_slug || article.topic;
+            navigationContext.setArticle(article.id, article.headline, article.keywords, topicSlug);
+            // Navigate to the editor page
+            goto(`/analyst/edit/${articleId}`);
+            return { success: true, action: 'edit_article', message: `Opening article #${articleId} for editing` };
+        } catch (e) {
+            return { success: false, action: 'edit_article', error: e instanceof Error ? e.message : `Article #${articleId} not found` };
+        }
+    }
+
+    async function handleViewArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'view_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'view_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            // Fetch and display the article in modal
+            const article = await getArticle(topic, articleId);
+            selectedArticle = article;
+            const topicSlug = article.topic_slug || article.topic;
+            navigationContext.setArticle(article.id, article.headline, article.keywords, topicSlug);
+            // Switch to the article's topic tab
+            if (topicSlug && topicSlug !== currentTab) {
+                handleTabChange(topicSlug, true);
+            }
+            return { success: true, action: 'view_article', message: `Viewing article #${articleId}: ${article.headline}` };
+        } catch (e) {
+            return { success: false, action: 'view_article', error: e instanceof Error ? e.message : `Article #${articleId} not found` };
+        }
+    }
+
+    async function handleSubmitArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'submit_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'submit_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            // Fetch the article to get its topic, then navigate to analyst page
+            const article = await getArticle(topic, articleId);
+            const topicSlug = article.topic_slug || article.topic;
+            navigationContext.setArticle(article.id, article.headline, article.keywords, topicSlug);
+            // Navigate to analyst page for the topic
+            goto(`/analyst/${topicSlug}`);
+            return { success: true, action: 'submit_article', message: `Navigate to analyst page to submit article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'submit_article', error: e instanceof Error ? e.message : `Article #${articleId} not found` };
+        }
+    }
+
+    async function handlePublishArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'publish_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'publish_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            // Fetch the article to get its topic, then navigate to editor page
+            const article = await getArticle(topic, articleId);
+            const topicSlug = article.topic_slug || article.topic;
+            navigationContext.setArticle(article.id, article.headline, article.keywords, topicSlug);
+            // Navigate to editor page for the topic
+            goto(`/editor/${topicSlug}`);
+            return { success: true, action: 'publish_article', message: `Navigate to editor page to publish article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'publish_article', error: e instanceof Error ? e.message : `Article #${articleId} not found` };
+        }
+    }
+
+    async function handleRejectArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'reject_article', error: 'No article ID specified' };
+        }
+        // Get topic from params, or from loaded articles, or from current tab
+        const topic = action.params?.topic ||
+            articles.find(a => a.id === articleId)?.topic ||
+            searchResults.find(a => a.id === articleId)?.topic ||
+            (currentTab !== 'search' ? currentTab : null);
+        if (!topic) {
+            return { success: false, action: 'reject_article', error: 'Cannot determine article topic' };
+        }
+        try {
+            // Fetch the article to get its topic, then navigate to editor page
+            const article = await getArticle(topic, articleId);
+            const topicSlug = article.topic_slug || article.topic;
+            navigationContext.setArticle(article.id, article.headline, article.keywords, topicSlug);
+            // Navigate to editor page for the topic
+            goto(`/editor/${topicSlug}`);
+            return { success: true, action: 'reject_article', message: `Navigate to editor page to reject article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'reject_article', error: e instanceof Error ? e.message : `Article #${articleId} not found` };
+        }
+    }
+
+    async function handleCreateNewArticleAction(action: UIAction): Promise<ActionResult> {
+        const topic = action.params?.topic || currentTab;
+        if (!topic || topic === 'search') {
+            return { success: false, action: 'create_new_article', error: 'No topic specified. Please select a topic first.' };
+        }
+        // Navigate to analyst page for the topic to create new article
+        goto(`/analyst/${topic}`);
+        return { success: true, action: 'create_new_article', message: `Navigate to analyst page to create article in ${topic}` };
+    }
+
     onMount(() => {
         if ($auth.isAuthenticated) {
             handleDeepLink();
         }
+
+        // Register action handlers for this page
+        actionUnsubscribers.push(
+            actionStore.registerHandler('select_topic_tab', handleSelectTopicTabAction),
+            actionStore.registerHandler('select_topic', handleSelectTopicAction),
+            actionStore.registerHandler('search_articles', handleSearchArticlesAction),
+            actionStore.registerHandler('clear_search', handleClearSearchAction),
+            actionStore.registerHandler('open_article', handleOpenArticleAction),
+            actionStore.registerHandler('rate_article', handleRateArticleAction),
+            actionStore.registerHandler('download_pdf', handleDownloadPdfAction),
+            actionStore.registerHandler('close_modal', handleCloseModalAction),
+            actionStore.registerHandler('select_article', handleSelectArticleAction),
+            // Article actions - navigate to appropriate page with context
+            actionStore.registerHandler('edit_article', handleEditArticleAction),
+            actionStore.registerHandler('view_article', handleViewArticleAction),
+            actionStore.registerHandler('submit_article', handleSubmitArticleAction),
+            actionStore.registerHandler('publish_article', handlePublishArticleAction),
+            actionStore.registerHandler('reject_article', handleRejectArticleAction),
+            actionStore.registerHandler('create_new_article', handleCreateNewArticleAction)
+        );
+    });
+
+    onDestroy(() => {
+        // Unregister action handlers
+        actionUnsubscribers.forEach(unsub => unsub());
     });
 </script>
 
@@ -330,64 +647,16 @@
                     <div class="error-message">{error}</div>
                 {/if}
 
-                {#if currentTab === 'chat'}
-                    <div class="chat-container">
-                        <div class="messages">
-                            {#if messages.length === 0}
-                                <div class="empty-state">
-                                    <p>Start a conversation by typing a message below</p>
-                                </div>
-                            {:else}
-                                {#each messages as message}
-                                    <div class="message {message.role}">
-                                        <div class="message-content">
-                                            {#if message.role === 'assistant'}
-                                                <Markdown content={message.content} />
-                                            {:else}
-                                                {message.content}
-                                            {/if}
-                                        </div>
-                                    </div>
-                                {/each}
-                            {/if}
-                            {#if loading}
-                                <div class="message assistant loading">
-                                    <div class="message-content">
-                                        <div class="typing-indicator">
-                                            <span></span>
-                                            <span></span>
-                                            <span></span>
-                                        </div>
-                                    </div>
-                                </div>
-                            {/if}
-                        </div>
-
-                        <div class="input-container">
-                            <div class="input-wrapper">
-                                <textarea
-                                    bind:value={inputMessage}
-                                    on:keypress={handleKeyPress}
-                                    placeholder="Type your message..."
-                                    rows="1"
-                                    disabled={loading}
-                                ></textarea>
-                                <button on:click={sendMessage} disabled={loading || !inputMessage.trim()}>
-                                    Send
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                {:else if currentTab === 'search'}
+                {#if currentTab === 'search'}
                     <div class="search-container">
                         {#if selectedArticle}
                             <!-- Article Detail View -->
                             <div class="article-detail" id="article-{selectedArticle.id}">
                                 <div class="article-actions">
-                                    <button class="back-btn" on:click={() => selectedArticle = null}>
+                                    <button class="back-btn" on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>
                                         Back to search results
                                     </button>
-                                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
+                                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.topic, selectedArticle.id)}>
                                         Download PDF
                                     </button>
                                 </div>
@@ -604,17 +873,17 @@
 
 <!-- View Article Modal -->
 {#if selectedArticle && !showRatingModal}
-    <div class="modal-overlay" on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>
+    <div class="modal-overlay" on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>
         <div class="modal large" on:click|stopPropagation>
             <!-- Fixed Header with Buttons -->
             <div class="modal-header-fixed">
                 <div class="modal-header">
                     <h2>{selectedArticle.headline}</h2>
-                    <button class="close-btn" on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>×</button>
+                    <button class="close-btn" on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>×</button>
                 </div>
                 <div class="modal-actions-fixed">
-                    <button on:click={() => { selectedArticle = null; selectedArticleResources = null; }}>← Back to Articles</button>
-                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
+                    <button on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>← Back to Articles</button>
+                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.topic, selectedArticle.id)}>
                         Download PDF
                     </button>
                     <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
@@ -662,7 +931,7 @@
 
 <!-- Rate Article Modal -->
 {#if selectedArticle && showRatingModal}
-    <div class="modal-overlay" on:click={() => { selectedArticle = null; showRatingModal = false; userRating = 0; }}>
+    <div class="modal-overlay" on:click={() => { selectedArticle = null; showRatingModal = false; userRating = 0; navigationContext.clearArticle(); }}>
         <div class="modal" on:click|stopPropagation>
             <h3>Rate Article</h3>
             <p class="article-title">{selectedArticle.headline}</p>

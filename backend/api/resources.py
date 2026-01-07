@@ -1465,35 +1465,17 @@ async def recall_table_resource(
 
 
 # =============================================================================
-# Admin/Maintenance Endpoints
-# =============================================================================
-
-@router.post("/admin/purge-orphans")
-async def purge_orphan_resources(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_admin)
-):
-    """
-    Purge all orphaned resources (resources with no article or group links).
-
-    Requires global:admin permission.
-
-    This performs HARD DELETE - removes files and all data permanently.
-    """
-    purged_count = ResourceService.purge_all_orphans(db)
-
-    return {
-        "message": f"Purged {purged_count} orphan resources",
-        "purged_count": purged_count
-    }
-
-
-# =============================================================================
 # Public Content Endpoints (No Authentication Required)
+# These use hash_id for security through obscurity - no auth needed
+# URL pattern: /api/r/{hash_id} (short public URL)
 # =============================================================================
 
-@router.get("/content/{hash_id}")
-async def get_resource_content(
+# Create a separate public router with shorter prefix
+public_router = APIRouter(prefix="/api/r", tags=["public-resources"])
+
+
+@public_router.get("/{hash_id}")
+async def serve_public_resource(
     hash_id: str,
     db: Session = Depends(get_db)
 ):
@@ -1511,7 +1493,7 @@ async def get_resource_content(
     For table resources, returns the table data as JSON.
 
     Example usage in HTML:
-        <img src="/api/resources/content/abc123xyz" />
+        <img src="/api/r/abc123xyz" />
     """
     # Get file path info (returns relative path, mime_type, filename)
     file_info = ResourceService.get_resource_file_path(db, hash_id)
@@ -1686,7 +1668,7 @@ async def get_resource_content(
     )
 
 
-@router.get("/content/{hash_id}/info")
+@public_router.get("/{hash_id}/info")
 async def get_resource_content_info(
     hash_id: str,
     db: Session = Depends(get_db)
@@ -1737,7 +1719,7 @@ async def get_resource_content_info(
     return result
 
 
-@router.get("/content/{hash_id}/embed")
+@public_router.get("/{hash_id}/embed")
 async def get_resource_embed_html(
     hash_id: str,
     db: Session = Depends(get_db)

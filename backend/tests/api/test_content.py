@@ -18,16 +18,16 @@ class TestReaderEndpoints:
     """Test reader-level content endpoints."""
 
     def test_get_articles_no_auth(self, client: TestClient):
-        """Test GET /api/content/articles/{topic} without auth."""
-        response = client.get("/api/content/articles/macro")
+        """Test GET /api/reader/{topic}/articles without auth."""
+        response = client.get("/api/reader/macro/articles")
         assert response.status_code == 401  # HTTPBearer returns 401 for missing auth
 
     def test_get_articles_with_auth(
         self, client: TestClient, auth_headers, test_topic, published_article, mock_redis
     ):
-        """Test GET /api/content/articles/{topic} returns published articles."""
+        """Test GET /api/reader/{topic}/articles returns published articles."""
         response = client.get(
-            f"/api/content/articles/{test_topic.slug}",
+            f"/api/reader/{test_topic.slug}/articles",
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -38,11 +38,11 @@ class TestReaderEndpoints:
             assert "headline" in data[0]
 
     def test_get_article_by_id(
-        self, client: TestClient, auth_headers, published_article, mock_redis
+        self, client: TestClient, auth_headers, test_topic, published_article, mock_redis
     ):
-        """Test GET /api/content/article/{article_id} returns article."""
+        """Test GET /api/reader/{topic}/article/{article_id} returns article."""
         response = client.get(
-            f"/api/content/article/{published_article.id}",
+            f"/api/reader/{test_topic.slug}/article/{published_article.id}",
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -50,18 +50,18 @@ class TestReaderEndpoints:
         assert data["headline"] == published_article.headline
 
     def test_get_article_not_found(
-        self, client: TestClient, auth_headers, mock_redis
+        self, client: TestClient, auth_headers, test_topic, mock_redis
     ):
-        """Test GET /api/content/article/{article_id} for non-existent article."""
-        response = client.get("/api/content/article/99999", headers=auth_headers)
+        """Test GET /api/reader/{topic}/article/{article_id} for non-existent article."""
+        response = client.get(f"/api/reader/{test_topic.slug}/article/99999", headers=auth_headers)
         assert response.status_code == 404
 
     def test_rate_article(
-        self, client: TestClient, auth_headers, published_article, db_session, mock_redis
+        self, client: TestClient, auth_headers, test_topic, published_article, db_session, mock_redis
     ):
-        """Test POST /api/content/article/{article_id}/rate."""
+        """Test POST /api/reader/{topic}/article/{article_id}/rate."""
         response = client.post(
-            f"/api/content/article/{published_article.id}/rate",
+            f"/api/reader/{test_topic.slug}/article/{published_article.id}/rate",
             json={"rating": 5},
             headers=auth_headers
         )
@@ -70,11 +70,11 @@ class TestReaderEndpoints:
         assert "rating" in data or "success" in str(data).lower()
 
     def test_rate_article_invalid_rating(
-        self, client: TestClient, auth_headers, published_article, mock_redis
+        self, client: TestClient, auth_headers, test_topic, published_article, mock_redis
     ):
-        """Test POST /api/content/article/{article_id}/rate with invalid rating."""
+        """Test POST /api/reader/{topic}/article/{article_id}/rate with invalid rating."""
         response = client.post(
-            f"/api/content/article/{published_article.id}/rate",
+            f"/api/reader/{test_topic.slug}/article/{published_article.id}/rate",
             json={"rating": 10},  # Invalid: should be 1-5
             headers=auth_headers
         )
@@ -83,9 +83,9 @@ class TestReaderEndpoints:
     def test_search_articles(
         self, client: TestClient, auth_headers, test_topic, published_article, mock_redis
     ):
-        """Test GET /api/content/search/{topic}."""
+        """Test GET /api/reader/{topic}/search."""
         response = client.get(
-            f"/api/content/search/{test_topic.slug}",
+            f"/api/reader/{test_topic.slug}/search",
             params={"query": "test"},
             headers=auth_headers
         )
@@ -96,9 +96,9 @@ class TestReaderEndpoints:
     def test_get_top_rated_articles(
         self, client: TestClient, auth_headers, test_topic, mock_redis
     ):
-        """Test GET /api/content/articles/{topic}/top-rated."""
+        """Test GET /api/reader/{topic}/articles/top-rated."""
         response = client.get(
-            f"/api/content/articles/{test_topic.slug}/top-rated",
+            f"/api/reader/{test_topic.slug}/articles/top-rated",
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -106,9 +106,9 @@ class TestReaderEndpoints:
     def test_get_most_read_articles(
         self, client: TestClient, auth_headers, test_topic, mock_redis
     ):
-        """Test GET /api/content/articles/{topic}/most-read."""
+        """Test GET /api/reader/{topic}/articles/most-read."""
         response = client.get(
-            f"/api/content/articles/{test_topic.slug}/most-read",
+            f"/api/reader/{test_topic.slug}/articles/most-read",
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -122,79 +122,65 @@ class TestAnalystEndpoints:
     ):
         """Test creating article without analyst permission."""
         response = client.post(
-            f"/api/content/article/new/{test_topic.slug}",
+            f"/api/analyst/{test_topic.slug}/article",
             headers=auth_headers  # Reader token
         )
-        # Should be forbidden for readers (403) or require auth (401)
-        # May also return 500 if topic validation fails in isolated transaction
-        assert response.status_code in [403, 401, 500]
+        # Should be forbidden for readers (403) - they don't have analyst permission
+        assert response.status_code == 403
 
     def test_create_article_with_permission(
         self, client: TestClient, analyst_headers, test_topic, db_session, mock_redis, mock_chromadb
     ):
-        """Test POST /api/content/article/new/{topic} with analyst permission."""
+        """Test POST /api/analyst/{topic}/article with analyst permission."""
         response = client.post(
-            f"/api/content/article/new/{test_topic.slug}",
+            f"/api/analyst/{test_topic.slug}/article",
             headers=analyst_headers
         )
-        # May return 200 (success) or 500 (if topic not visible in separate session)
-        if response.status_code == 200:
-            data = response.json()
-            assert "id" in data
-            assert data["status"] == "draft"
-        else:
-            # Accept 500 if topic lookup fails due to transaction isolation
-            assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        assert "id" in data
+        assert data["status"] == "draft"
 
     def test_edit_article(
-        self, client: TestClient, analyst_headers, test_article, db_session, mock_redis, mock_chromadb
+        self, client: TestClient, analyst_headers, test_topic, test_article, db_session, mock_redis, mock_chromadb
     ):
-        """Test PUT /api/content/article/{article_id}/edit."""
+        """Test PUT /api/analyst/{topic}/article/{article_id}."""
         response = client.put(
-            f"/api/content/article/{test_article.id}/edit",
+            f"/api/analyst/{test_topic.slug}/article/{test_article.id}",
             json={
                 "headline": "Updated Headline",
                 "keywords": "updated, test"
             },
             headers=analyst_headers
         )
-        # May return 200 (success) or 500 (if topic validation fails)
-        if response.status_code == 200:
-            data = response.json()
-            assert data["headline"] == "Updated Headline"
-        else:
-            assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["headline"] == "Updated Headline"
 
     def test_get_analyst_drafts(
         self, client: TestClient, analyst_headers, test_topic, test_article, mock_redis, mock_chromadb
     ):
-        """Test GET /api/content/analyst/articles/{topic}."""
+        """Test GET /api/analyst/{topic}/articles."""
         response = client.get(
-            f"/api/content/analyst/articles/{test_topic.slug}",
+            f"/api/analyst/{test_topic.slug}/articles",
             headers=analyst_headers
         )
-        # May return 200 (success) or 500 (if topic validation fails)
-        if response.status_code == 200:
-            data = response.json()
-            assert isinstance(data, list)
-        else:
-            assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
 
     def test_submit_article_for_review(
-        self, client: TestClient, analyst_headers, test_article, db_session, mock_redis, mock_chromadb
+        self, client: TestClient, analyst_headers, test_topic, test_article, db_session, mock_redis, mock_chromadb
     ):
-        """Test POST /api/content/article/{article_id}/approve (submit for review)."""
+        """Test POST /api/analyst/{topic}/article/{article_id}/submit (submit for review)."""
         response = client.post(
-            f"/api/content/article/{test_article.id}/approve",
+            f"/api/analyst/{test_topic.slug}/article/{test_article.id}/submit",
             headers=analyst_headers
         )
-        # May return 200 (success) or 500 (if topic validation fails)
-        if response.status_code == 200:
-            data = response.json()
-            # Response format: {"message": "...", "article": {...}}
-            assert data["article"]["status"] == "editor"
-        else:
-            assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        # Response format: {"message": "...", "article": {...}}
+        assert data["article"]["status"] == "editor"
 
 
 class TestEditorEndpoints:
@@ -203,44 +189,38 @@ class TestEditorEndpoints:
     def test_get_editor_queue(
         self, client: TestClient, editor_headers, test_topic, mock_redis, mock_chromadb
     ):
-        """Test GET /api/content/editor/articles/{topic}."""
+        """Test GET /api/editor/{topic}/articles."""
         response = client.get(
-            f"/api/content/editor/articles/{test_topic.slug}",
+            f"/api/editor/{test_topic.slug}/articles",
             headers=editor_headers
         )
-        # May return 200 (success) or 500 (if topic validation fails)
-        if response.status_code == 200:
-            data = response.json()
-            assert isinstance(data, list)
-        else:
-            assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
 
     def test_reject_article(
-        self, client: TestClient, editor_headers, test_article, db_session, mock_redis, mock_chromadb
+        self, client: TestClient, editor_headers, test_topic, test_article, db_session, mock_redis, mock_chromadb
     ):
-        """Test POST /api/content/article/{article_id}/reject."""
+        """Test POST /api/editor/{topic}/article/{article_id}/reject."""
         # First submit the article for review
         test_article.status = ArticleStatus.EDITOR
         db_session.commit()
 
         response = client.post(
-            f"/api/content/article/{test_article.id}/reject",
+            f"/api/editor/{test_topic.slug}/article/{test_article.id}/reject",
             json={"reason": "Needs more data"},
             headers=editor_headers
         )
-        # May return 200 (success) or 500 (if topic validation fails)
-        if response.status_code == 200:
-            data = response.json()
-            # Response format: {"message": "...", "article": {...}}
-            assert data["article"]["status"] == "draft"
-        else:
-            assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        # Response format: {"message": "...", "article": {...}}
+        assert data["article"]["status"] == "draft"
 
     @pytest.mark.integration
     def test_publish_article(
-        self, client: TestClient, editor_headers, test_article, db_session, mock_redis, mock_chromadb
+        self, client: TestClient, editor_headers, test_topic, test_article, db_session, mock_redis, mock_chromadb
     ):
-        """Test POST /api/content/article/{article_id}/publish."""
+        """Test POST /api/editor/{topic}/article/{article_id}/publish."""
         # First submit the article for review
         test_article.status = ArticleStatus.EDITOR
         db_session.commit()
@@ -254,11 +234,12 @@ class TestEditorEndpoints:
             mock_agent.return_value = mock_instance
 
             response = client.post(
-                f"/api/content/article/{test_article.id}/publish",
+                f"/api/editor/{test_topic.slug}/article/{test_article.id}/publish",
                 headers=editor_headers
             )
-            # May be 200, 202 (async), or 500 (if topic validation fails)
-            assert response.status_code in [200, 202, 500]
+            assert response.status_code == 200
+            data = response.json()
+            assert data["article"]["status"] == "published"
 
 
 class TestAdminContentEndpoints:
@@ -267,9 +248,9 @@ class TestAdminContentEndpoints:
     def test_get_all_articles_no_admin(
         self, client: TestClient, auth_headers, test_topic, mock_redis
     ):
-        """Test GET /api/content/admin/articles/{topic} without admin permission."""
+        """Test GET /api/admin/{topic}/articles without admin permission."""
         response = client.get(
-            f"/api/content/admin/articles/{test_topic.slug}",
+            f"/api/admin/{test_topic.slug}/articles",
             headers=auth_headers  # Reader token
         )
         assert response.status_code in [403, 401]
@@ -277,19 +258,19 @@ class TestAdminContentEndpoints:
     def test_get_all_articles_with_admin(
         self, client: TestClient, admin_headers, test_topic, mock_redis
     ):
-        """Test GET /api/content/admin/articles/{topic} with admin permission."""
+        """Test GET /api/admin/{topic}/articles with admin permission."""
         response = client.get(
-            f"/api/content/admin/articles/{test_topic.slug}",
+            f"/api/admin/{test_topic.slug}/articles",
             headers=admin_headers
         )
         assert response.status_code == 200
 
     def test_recall_published_article(
-        self, client: TestClient, admin_headers, published_article, db_session, mock_redis
+        self, client: TestClient, admin_headers, test_topic, published_article, db_session, mock_redis
     ):
-        """Test POST /api/content/admin/article/{article_id}/recall."""
+        """Test POST /api/admin/{topic}/article/{article_id}/recall."""
         response = client.post(
-            f"/api/content/admin/article/{published_article.id}/recall",
+            f"/api/admin/{test_topic.slug}/article/{published_article.id}/recall",
             headers=admin_headers
         )
         assert response.status_code == 200
@@ -300,25 +281,25 @@ class TestAdminContentEndpoints:
             assert data["article"]["status"] == "draft"
 
     def test_deactivate_article(
-        self, client: TestClient, admin_headers, test_article, db_session, mock_redis
+        self, client: TestClient, admin_headers, test_topic, test_article, db_session, mock_redis
     ):
-        """Test DELETE /api/content/admin/article/{article_id} (soft delete)."""
+        """Test DELETE /api/admin/{topic}/article/{article_id} (soft delete)."""
         response = client.delete(
-            f"/api/content/admin/article/{test_article.id}",
+            f"/api/admin/{test_topic.slug}/article/{test_article.id}",
             headers=admin_headers
         )
         assert response.status_code == 200
 
     def test_reactivate_article(
-        self, client: TestClient, admin_headers, test_article, db_session, mock_redis
+        self, client: TestClient, admin_headers, test_topic, test_article, db_session, mock_redis
     ):
-        """Test POST /api/content/admin/article/{article_id}/reactivate."""
+        """Test POST /api/admin/{topic}/article/{article_id}/reactivate."""
         # First deactivate
         test_article.is_active = False
         db_session.commit()
 
         response = client.post(
-            f"/api/content/admin/article/{test_article.id}/reactivate",
+            f"/api/admin/{test_topic.slug}/article/{test_article.id}/reactivate",
             headers=admin_headers
         )
         assert response.status_code == 200
@@ -327,11 +308,11 @@ class TestAdminContentEndpoints:
     def test_purge_article(
         self, client: TestClient, admin_headers, test_article, db_session, mock_redis, mock_chromadb
     ):
-        """Test DELETE /api/content/admin/article/{article_id}/purge (permanent delete)."""
+        """Test DELETE /api/admin/global/article/{article_id}/purge (permanent delete)."""
         article_id = test_article.id
 
         response = client.delete(
-            f"/api/content/admin/article/{article_id}/purge",
+            f"/api/admin/global/article/{article_id}/purge",
             headers=admin_headers
         )
         assert response.status_code == 200
@@ -345,9 +326,9 @@ class TestAdminContentEndpoints:
     def test_reorder_articles(
         self, client: TestClient, admin_headers, test_topic, test_article, published_article, db_session, mock_redis
     ):
-        """Test POST /api/content/admin/articles/reorder."""
+        """Test POST /api/admin/global/articles/reorder."""
         response = client.post(
-            "/api/content/admin/articles/reorder",
+            "/api/admin/global/articles/reorder",
             json={
                 "articles": [  # API expects "articles" with "id" and "priority"
                     {"id": test_article.id, "priority": 10},

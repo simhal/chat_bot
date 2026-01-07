@@ -1,0 +1,43 @@
+%%{init: {'theme': 'base'}}%%
+stateDiagram-v2
+    [*] --> Draft: Create Article
+
+    Draft --> Draft: Edit Content
+    Draft --> Editor: Submit for Review
+    Draft --> Inactive: Deactivate
+
+    Editor --> Draft: Reject with Notes
+    Editor --> Published: Publish
+    Editor --> Inactive: Deactivate
+
+    Published --> Draft: Recall
+    Published --> Inactive: Deactivate
+
+    Inactive --> Draft: Reactivate
+    Inactive --> [*]: Purge (Permanent Delete)
+
+    note right of Draft
+        Analyst can:
+        - Edit content
+        - Add resources
+        - Submit for review
+    end note
+
+    note right of Editor
+        Editor can:
+        - Review content
+        - Request changes
+        - Publish article
+    end note
+
+    note right of Published
+        Visible to readers
+        Can be rated
+        Indexed in search
+    end note
+
+    note right of Inactive
+        Hidden from readers
+        Preserved in database
+        Admin can restore
+    end note

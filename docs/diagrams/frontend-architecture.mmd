@@ -1,0 +1,43 @@
+%%{init: {'theme': 'base'}}%%
+graph TB
+    subgraph Pages["SvelteKit Pages"]
+        Home["/  Home Page"]
+        Analyst_Hub["/analyst  Analyst Hub"]
+        Analyst_Topic["/analyst/[topic]  Topic Drafts"]
+        Analyst_Edit["/analyst/edit/[id]  Article Editor"]
+        Editor_Hub["/editor  Editor Hub"]
+        Editor_Topic["/editor/[topic]  Review Queue"]
+        Admin["/admin  Topic Admin"]
+        Admin_Global["/admin/global  Global Admin"]
+        Profile["/profile  User Profile"]
+        Auth_Callback["/auth/callback  OAuth Callback"]
+    end
+
+    subgraph Components["Shared Components"]
+        ChatPanel[ChatPanel]
+        Markdown[Markdown Renderer]
+        Header[Header Navigation]
+        ResourceEditor[Resource Editor]
+        SplitPane[Split Pane Layout]
+    end
+
+    subgraph Stores["Svelte Stores"]
+        Auth_Store[auth.ts<br>Authentication State]
+        Nav_Store[navigation.ts<br>Navigation Context]
+        Action_Store[actions.ts<br>UI Action Queue]
+        Editor_Store[navigation.ts<br>Editor Content]
+    end
+
+    subgraph API["API Client"]
+        API_Client[api.ts<br>Backend Communication]
+    end
+
+    Pages --> Components
+    Components --> Stores
+    Stores --> API_Client
+    API_Client --> Backend[(Backend API)]
+
+    ChatPanel --> Action_Store
+    Action_Store --> Pages
+    Pages --> Nav_Store
+    Nav_Store --> ChatPanel

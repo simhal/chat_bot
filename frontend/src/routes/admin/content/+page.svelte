@@ -3,6 +3,10 @@
     import { getAdminArticles, deleteArticle, reactivateArticle, editArticle, generateContent, searchArticles, type SearchParams } from '$lib/api';
     import { onMount } from 'svelte';
     import { goto } from '$app/navigation';
+    import { navigationContext } from '$lib/stores/navigation';
+
+    // Set navigation context for admin content section
+    navigationContext.setContext({ section: 'admin', topic: null, subNav: 'content', articleId: null, articleHeadline: null, role: 'admin' });
 
     type Topic = 'macro' | 'equity' | 'fixed_income' | 'esg';
 
@@ -88,7 +92,7 @@
 
         try {
             error = '';
-            await deleteArticle(articleId);
+            await deleteArticle(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to delete article';
@@ -100,7 +104,7 @@
 
         try {
             error = '';
-            await reactivateArticle(articleId);
+            await reactivateArticle(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to reactivate article';

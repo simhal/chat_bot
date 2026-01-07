@@ -509,11 +509,16 @@ def mock_redis():
 
 @pytest.fixture(scope="function")
 def mock_chromadb():
-    """Mock ChromaDB client and VectorService for tests that don't need real vector DB."""
+    """Mock ChromaDB client and VectorService for tests that don't need real vector DB.
+
+    Also mocks get_valid_topics_sync to return test topics, since the real function
+    creates its own database session that can't see test fixtures.
+    """
     with patch("services.vector_service._get_chroma_client") as mock_client, \
          patch("services.vector_service.VectorService.get_article_data") as mock_get_data, \
          patch("services.vector_service.VectorService.add_article") as mock_add, \
-         patch("services.vector_service.VectorService.delete_article") as mock_delete:
+         patch("services.vector_service.VectorService.delete_article") as mock_delete, \
+         patch("dependencies.get_valid_topics_sync") as mock_topics_sync:
 
         chroma_mock = MagicMock()
         collection_mock = MagicMock()
@@ -530,6 +535,10 @@ def mock_chromadb():
         mock_get_data.return_value = None  # Return None to use PostgreSQL fallback
         mock_add.return_value = True
         mock_delete.return_value = True
+
+        # Mock get_valid_topics_sync to return test topics
+        # This allows require_analyst/require_editor to work in tests
+        mock_topics_sync.return_value = ["macro", "equity", "fixed_income", "esg"]
 
         yield chroma_mock
 

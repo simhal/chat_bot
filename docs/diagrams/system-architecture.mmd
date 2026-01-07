@@ -1,0 +1,74 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e1f5fe', 'primaryBorderColor': '#01579b', 'lineColor': '#01579b'}}}%%
+graph TB
+    subgraph Frontend["Frontend (SvelteKit)"]
+        UI[Web UI]
+        Stores[Svelte Stores]
+        API_Client[API Client]
+    end
+
+    subgraph Backend["Backend (FastAPI)"]
+        subgraph API_Layer["API Layer"]
+            Auth_API["/api/auth"]
+            Reader_API["/api/reader/{topic}"]
+            Analyst_API["/api/analyst/{topic}"]
+            Editor_API["/api/editor/{topic}"]
+            Admin_API["/api/admin/{topic}"]
+            Global_Admin["/api/admin/global"]
+            Chat_API["/api/chat"]
+        end
+
+        subgraph Services["Service Layer"]
+            Auth_Service[Auth Service]
+            Content_Service[Content Service]
+            Agent_Service[Agent Service]
+            Vector_Service[Vector Service]
+        end
+
+        subgraph Agents["Multi-Agent System"]
+            Main_Agent[Main Chat Agent]
+            Router[Intent Router]
+            Analyst_Agent[Analyst Agent]
+            Editor_Agent[Editor SubAgent]
+            Specialists[Specialist Agents]
+        end
+    end
+
+    subgraph Workers["Background Workers"]
+        Celery[Celery Workers]
+    end
+
+    subgraph Data["Data Layer"]
+        PostgreSQL[(PostgreSQL)]
+        Redis[(Redis)]
+        ChromaDB[(ChromaDB)]
+    end
+
+    subgraph External["External Services"]
+        OpenAI[OpenAI API]
+        LinkedIn[LinkedIn OAuth]
+        Google[Google Search]
+    end
+
+    UI --> Stores
+    Stores --> API_Client
+    API_Client --> API_Layer
+
+    API_Layer --> Services
+    Chat_API --> Agent_Service
+    Agent_Service --> Agents
+
+    Main_Agent --> Router
+    Router --> Analyst_Agent
+    Router --> Editor_Agent
+    Router --> Specialists
+
+    Agents --> Celery
+    Celery --> Redis
+
+    Services --> PostgreSQL
+    Services --> Redis
+    Vector_Service --> ChromaDB
+
+    Agent_Service --> OpenAI
+    Auth_Service --> LinkedIn
+    Specialists --> Google

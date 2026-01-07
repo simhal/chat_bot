@@ -123,15 +123,99 @@ export async function apiRequest(endpoint: string, options: RequestInit = {}) {
     return response.json();
 }
 
-export async function sendChatMessage(message: string) {
+export interface NavigationContextAPI {
+    section: string;
+    topic: string | null;
+    article_id: number | null;
+    article_headline: string | null;
+    article_keywords: string | null;
+    sub_nav: string | null;
+    role: string;  // Current role: reader, analyst, editor, admin
+}
+
+export interface NavigationCommand {
+    action: string;  // 'navigate' | 'logout' | 'create_article'
+    target: string | null;  // URL path or section name
+    params: Record<string, any> | null;  // Additional parameters
+}
+
+export interface LinkedResource {
+    resource_id: number;
+    name: string;
+    type: string;
+    hash_id?: string;
+    already_linked?: boolean;
+}
+
+export interface EditorContent {
+    headline?: string;
+    content?: string;
+    keywords?: string;
+    action: string;  // 'fill' | 'append' | 'replace'
+    linked_resources?: LinkedResource[];
+    article_id?: number;
+}
+
+export interface UIActionCommand {
+    type: string;  // UI action type (save_draft, submit_for_review, publish_article, etc.)
+    params?: {
+        article_id?: number;
+        topic?: string;
+        rating?: number;
+        search_query?: string;
+        resource_id?: number;
+        scope?: string;  // 'global' | 'topic' | 'article' | 'all'
+        action?: string;  // 'add' | 'remove' | 'view'
+        [key: string]: any;
+    };
+}
+
+/**
+ * HITL confirmation prompt - displays confirm/cancel buttons inline in chat.
+ * Used for actions that require explicit user confirmation before executing.
+ */
+export interface ConfirmationPrompt {
+    id: string;           // Unique ID for this confirmation
+    type: string;         // Confirmation type (e.g., 'publish_approval', 'delete_article')
+    title: string;        // Short title (e.g., "Confirm Publication")
+    message: string;      // Explanation of what will happen
+    article_id?: number;  // Related article ID
+    confirm_label: string;  // Button label (e.g., "Publish Now")
+    cancel_label: string;   // Button label (e.g., "Cancel")
+    confirm_endpoint: string;  // API endpoint to call on confirm
+    confirm_method?: string;   // HTTP method (default: POST)
+    confirm_body?: Record<string, any>;  // Request body for confirm
+}
+
+export interface ChatResponse {
+    response: string;
+    agent_type?: string;
+    routing_reason?: string;
+    articles?: Array<{ id: number; topic: string; headline: string }>;
+    navigation?: NavigationCommand;
+    editor_content?: EditorContent;  // Content to fill into editor UI (not displayed in chat)
+    ui_action?: UIActionCommand;  // UI action to execute (button click, tab selection, etc.)
+    confirmation?: ConfirmationPrompt;  // HITL confirmation prompt with buttons
+}
+
+export async function sendChatMessage(message: string, navigationContext?: NavigationContextAPI): Promise<ChatResponse> {
     return apiRequest('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ message })
+        body: JSON.stringify({
+            message,
+            navigation_context: navigationContext || null
+        })
+    });
+}
+
+export async function clearChatHistory(): Promise<{ message: string }> {
+    return apiRequest('/api/chat/history', {
+        method: 'DELETE'
     });
 }
 
 export async function getUserInfo() {
-    return apiRequest('/api/me');
+    return apiRequest('/api/user');
 }
 
 export async function logout(refreshToken: string | null) {
@@ -195,43 +279,47 @@ export async function createGroup(name: string, description?: string) {
     });
 }
 
-// Content management API functions
+// Content management API functions (Topic Admin - requires global:admin OR {topic}:admin)
 export async function getAdminArticles(topic: string, offset: number = 0, limit: number = 20) {
-    return apiRequest(`/api/content/admin/articles/${topic}?offset=${offset}&limit=${limit}`);
+    return apiRequest(`/api/admin/${topic}/articles?offset=${offset}&limit=${limit}`);
 }
 
-export async function deleteArticle(articleId: number) {
-    return apiRequest(`/api/content/admin/article/${articleId}`, {
+export async function deleteArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/admin/${topic}/article/${articleId}`, {
         method: 'DELETE'
     });
 }
 
-export async function reactivateArticle(articleId: number) {
-    return apiRequest(`/api/content/admin/article/${articleId}/reactivate`, {
+export async function reactivateArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/admin/${topic}/article/${articleId}/reactivate`, {
         method: 'POST'
     });
 }
 
-export async function recallArticle(articleId: number) {
-    return apiRequest(`/api/content/admin/article/${articleId}/recall`, {
+export async function recallArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/admin/${topic}/article/${articleId}/recall`, {
         method: 'POST'
     });
 }
 
+// Global admin only
 export async function purgeArticle(articleId: number) {
-    return apiRequest(`/api/content/admin/article/${articleId}/purge`, {
+    return apiRequest(`/api/admin/global/article/${articleId}/purge`, {
         method: 'DELETE'
     });
 }
 
-export async function rateArticle(articleId: number, rating: number) {
-    return apiRequest(`/api/content/article/${articleId}/rate`, {
+// Reader endpoints - require global:reader+ OR {topic}:reader+
+export async function rateArticle(topic: string, articleId: number, rating: number) {
+    return apiRequest(`/api/reader/${topic}/article/${articleId}/rate`, {
         method: 'POST',
         body: JSON.stringify({ rating })
     });
 }
 
+// Analyst endpoints - require topic in URL
 export async function editArticle(
+    topic: string,
     articleId: number,
     headline?: string,
     content?: string,
@@ -240,29 +328,29 @@ export async function editArticle(
     priority?: number,
     is_sticky?: boolean
 ) {
-    return apiRequest(`/api/content/article/${articleId}/edit`, {
+    return apiRequest(`/api/analyst/${topic}/article/${articleId}`, {
         method: 'PUT',
         body: JSON.stringify({ headline, content, keywords, status, priority, is_sticky })
     });
 }
 
-// Reorder articles (admin only) - bulk update priorities
+// Reorder articles (global admin only) - bulk update priorities
 export async function reorderArticles(articles: Array<{ id: number; priority: number }>): Promise<{ message: string; updated: number[] }> {
-    return apiRequest('/api/content/admin/articles/reorder', {
+    return apiRequest('/api/admin/global/articles/reorder', {
         method: 'POST',
         body: JSON.stringify({ articles })
     });
 }
 
 export async function generateContent(topic: string, query: string) {
-    return apiRequest(`/api/content/generate/${topic}`, {
+    return apiRequest(`/api/analyst/${topic}/generate`, {
         method: 'POST',
         body: JSON.stringify({ query })
     });
 }
 
 export async function createEmptyArticle(topic: string, headline?: string): Promise<{ id: number }> {
-    return apiRequest(`/api/content/article/new/${topic}`, {
+    return apiRequest(`/api/analyst/${topic}/article`, {
         method: 'POST',
         body: JSON.stringify({ headline: headline || 'New Article' })
     });
@@ -290,17 +378,18 @@ export async function searchArticles(topic: string, params: SearchParams) {
     if (params.limit) queryParams.append('limit', params.limit.toString());
 
     const query = queryParams.toString();
-    return apiRequest(`/api/content/search/${topic}${query ? '?' + query : ''}`);
+    return apiRequest(`/api/reader/${topic}/search${query ? '?' + query : ''}`);
 }
 
 export async function chatWithContentAgent(
+    topic: string,
     articleId: number,
     message: string,
     currentHeadline: string,
     currentContent: string,
     currentKeywords?: string
 ) {
-    return apiRequest(`/api/content/article/${articleId}/chat`, {
+    return apiRequest(`/api/analyst/${topic}/article/${articleId}/chat`, {
         method: 'POST',
         body: JSON.stringify({
             message,
@@ -311,11 +400,11 @@ export async function chatWithContentAgent(
     });
 }
 
-export async function getArticle(articleId: number) {
-    return apiRequest(`/api/content/article/${articleId}`);
+export async function getArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/reader/${topic}/article/${articleId}`);
 }
 
-export async function downloadArticlePDF(articleId: number) {
+export async function downloadArticlePDF(topic: string, articleId: number) {
     const authState = get(auth);
 
     const headers = new Headers();
@@ -323,7 +412,7 @@ export async function downloadArticlePDF(articleId: number) {
         headers.set('Authorization', `Bearer ${authState.accessToken}`);
     }
 
-    const response = await fetch(`${PUBLIC_API_URL}/api/content/article/${articleId}/pdf`, {
+    const response = await fetch(`${PUBLIC_API_URL}/api/reader/${topic}/article/${articleId}/pdf`, {
         method: 'GET',
         headers
     });
@@ -357,42 +446,43 @@ export async function downloadArticlePDF(articleId: number) {
 
 // User Profile API functions
 export async function getUserProfile() {
-    return apiRequest('/api/profile/me');
+    return apiRequest('/api/user/profile');
 }
 
 export async function deleteUserAccount() {
-    return apiRequest('/api/profile/me', {
+    return apiRequest('/api/user/account', {
         method: 'DELETE'
     });
 }
 
 // Editorial workflow API functions
 export async function getAnalystDraftArticles(topic: string, offset: number = 0, limit: number = 20) {
-    return apiRequest(`/api/content/analyst/articles/${topic}?offset=${offset}&limit=${limit}`);
+    return apiRequest(`/api/analyst/${topic}/articles?offset=${offset}&limit=${limit}`);
 }
 
 export async function getEditorArticles(topic: string, offset: number = 0, limit: number = 20) {
-    return apiRequest(`/api/content/editor/articles/${topic}?offset=${offset}&limit=${limit}`);
+    return apiRequest(`/api/editor/${topic}/articles?offset=${offset}&limit=${limit}`);
 }
 
 export async function getPublishedArticles(topic: string, limit: number = 10) {
-    return apiRequest(`/api/content/published/articles/${topic}?limit=${limit}`);
+    return apiRequest(`/api/reader/${topic}/published?limit=${limit}`);
 }
 
-export async function approveArticle(articleId: number) {
-    return apiRequest(`/api/content/article/${articleId}/approve`, {
+export async function submitArticleForReview(topic: string, articleId: number) {
+    return apiRequest(`/api/analyst/${topic}/article/${articleId}/submit`, {
         method: 'POST'
     });
 }
 
-export async function rejectArticle(articleId: number) {
-    return apiRequest(`/api/content/article/${articleId}/reject`, {
-        method: 'POST'
+export async function rejectArticle(topic: string, articleId: number, feedback?: string) {
+    return apiRequest(`/api/editor/${topic}/article/${articleId}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ feedback })
     });
 }
 
-export async function publishArticle(articleId: number) {
-    return apiRequest(`/api/content/article/${articleId}/publish`, {
+export async function publishArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/editor/${topic}/article/${articleId}/publish`, {
         method: 'POST'
     });
 }
@@ -839,7 +929,7 @@ export async function getArticleResources(articleId: number): Promise<{ resource
  * Example: <img src={getResourceContentUrl(resource.hash_id)} />
  */
 export function getResourceContentUrl(hashId: string): string {
-    return `${PUBLIC_API_URL}/api/resources/content/${hashId}`;
+    return `${PUBLIC_API_URL}/api/r/${hashId}`;
 }
 
 /**
@@ -858,7 +948,7 @@ export interface ResourceInfo {
  * Useful for rendering resource links in markdown previews.
  */
 export async function getResourceInfo(hashId: string): Promise<ResourceInfo> {
-    const response = await fetch(`${PUBLIC_API_URL}/api/resources/content/${hashId}/info`);
+    const response = await fetch(`${PUBLIC_API_URL}/api/r/${hashId}/info`);
     if (!response.ok) {
         throw new Error('Resource not found');
     }
@@ -1078,16 +1168,16 @@ export interface ArticlePublicationResources {
 }
 
 // Get publication resources for a published article
-export async function getArticlePublicationResources(articleId: number): Promise<ArticlePublicationResources> {
-    return apiRequest(`/api/content/article/${articleId}/resources`);
+export async function getArticlePublicationResources(topic: string, articleId: number): Promise<ArticlePublicationResources> {
+    return apiRequest(`/api/reader/${topic}/article/${articleId}/resources`);
 }
 
 // Helper to get full URL for published article HTML
 export function getPublishedArticleHtmlUrl(hashId: string): string {
-    return `${PUBLIC_API_URL}/api/resources/content/${hashId}`;
+    return `${PUBLIC_API_URL}/api/r/${hashId}`;
 }
 
 // Helper to get full URL for published article PDF download
 export function getPublishedArticlePdfUrl(hashId: string): string {
-    return `${PUBLIC_API_URL}/api/resources/content/${hashId}`;
+    return `${PUBLIC_API_URL}/api/r/${hashId}`;
 }

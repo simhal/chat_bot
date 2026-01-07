@@ -3,8 +3,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from database import get_db
+
+# Reserved slugs that cannot be used as topic names
+# These would collide with navigation routes like /admin/global, /admin/content
+RESERVED_SLUGS = {"global", "content", "edit"}
 from models import Topic, Group, ContentArticle
 from dependencies import get_current_user, require_admin
 import logging
@@ -18,7 +22,9 @@ router = APIRouter(prefix="/api/topics", tags=["topics"])
 
 class TopicCreate(BaseModel):
     """Request model for creating a topic."""
-    slug: str = Field(..., min_length=2, max_length=50, pattern=r'^[a-z][a-z0-9_]*$')
+    # Slug must be URL-safe: lowercase letters, numbers, hyphens, underscores
+    # Must start with a letter, no spaces or special characters
+    slug: str = Field(..., min_length=2, max_length=50, pattern=r'^[a-z][a-z0-9_-]*$')
     title: str = Field(..., min_length=2, max_length=200)
     description: Optional[str] = None
     visible: bool = True
@@ -31,6 +37,14 @@ class TopicCreate(BaseModel):
     color: Optional[str] = None
     sort_order: int = 0
     article_order: str = "date"  # 'date', 'priority', 'title'
+
+    @field_validator('slug')
+    @classmethod
+    def slug_not_reserved(cls, v: str) -> str:
+        """Ensure slug is not a reserved word that would collide with routes."""
+        if v.lower() in RESERVED_SLUGS:
+            raise ValueError(f"'{v}' is a reserved slug and cannot be used as a topic name. Reserved: {', '.join(sorted(RESERVED_SLUGS))}")
+        return v
 
 
 class TopicUpdate(BaseModel):

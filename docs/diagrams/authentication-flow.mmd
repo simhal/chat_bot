@@ -1,0 +1,36 @@
+%%{init: {'theme': 'base'}}%%
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant LinkedIn
+    participant Database
+
+    User->>Frontend: Click "Sign in with LinkedIn"
+    Frontend->>Backend: GET /api/auth/linkedin
+    Backend-->>Frontend: Redirect URL + State
+    Frontend->>LinkedIn: OAuth Authorization Request
+    LinkedIn->>User: Show Consent Screen
+    User->>LinkedIn: Authorize Application
+    LinkedIn->>Frontend: Redirect with Auth Code
+    Frontend->>Backend: POST /api/auth/callback (code, state)
+
+    Backend->>LinkedIn: Exchange Code for Token
+    LinkedIn-->>Backend: Access Token + ID Token
+    Backend->>LinkedIn: Fetch User Profile
+    LinkedIn-->>Backend: User Profile Data
+
+    Backend->>Database: Find or Create User
+    Database-->>Backend: User Record + Groups
+    Backend->>Backend: Generate JWT (with scopes)
+    Backend-->>Frontend: JWT Access Token + Refresh Token
+
+    Frontend->>Frontend: Store Tokens in localStorage
+    Frontend->>User: Redirect to Application
+
+    Note over Frontend,Backend: Subsequent API Requests
+
+    Frontend->>Backend: API Request + Bearer Token
+    Backend->>Backend: Validate JWT
+    Backend->>Backend: Check Scopes for Permission
+    Backend-->>Frontend: API Response

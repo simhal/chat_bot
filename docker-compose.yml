@@ -1,3 +1,6 @@
+# Development environment - data persists across restarts
+# Use: docker-compose up -d
+name: chatbot-app
 
 services:
   # PostgreSQL database - start separately with: docker-compose up -d postgres
@@ -57,15 +60,14 @@ services:
     container_name: chatbot-backend
     ports:
       - "8000:8000"
-    # environment:
-    #   - LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
-    #   - OPENAI_API_KEY=${OPENAI_API_KEY}
-    #   - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-    #   - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
     env_file:
       - ./backend/.env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
     volumes:
       - uploads_data:/app/uploads
+      - ./docs:/app/docs:ro  # Mount docs for frontend documentation (read-only)
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +82,32 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Celery worker for background agent tasks
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chatbot-celery-worker
+    command: uv run celery -A celery_app worker -Q default,analyst,research,articles,editor -l info --concurrency=2
+    env_file:
+      - ./backend/.env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - PYTHONPATH=/app
+    working_dir: /app
+    volumes:
+      - uploads_data:/app/uploads
+      - ./docs:/app/docs:ro  # Mount docs for frontend documentation (read-only)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+    restart: unless-stopped
 
   frontend:
     build:

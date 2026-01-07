@@ -113,22 +113,23 @@ start_base_containers() {
     cd "$PROJECT_ROOT"
 
     # Stop and remove existing test containers to ensure fresh data
+    # IMPORTANT: Use -p chatbot-test to ensure we only affect test containers/volumes
     echo "Removing existing test containers..."
-    docker-compose -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
+    docker-compose -p chatbot-test -f docker-compose.test.yml down -v --remove-orphans 2>/dev/null || true
 
     local BUILD_ARG=""
     if [ "$NO_BUILD" = false ]; then
         BUILD_ARG="--build"
     fi
 
-    docker-compose -f docker-compose.test.yml up -d $BUILD_ARG postgres-test redis-test chroma-test
+    docker-compose -p chatbot-test -f docker-compose.test.yml up -d $BUILD_ARG postgres-test redis-test chroma-test
 
     echo -e "${GREEN}Waiting for containers to be healthy...${NC}"
 
     # Wait for PostgreSQL
     echo "Waiting for PostgreSQL..."
     for i in {1..30}; do
-        if docker-compose -f docker-compose.test.yml exec -T postgres-test pg_isready -U chatbot_test_user -d chatbot_test > /dev/null 2>&1; then
+        if docker-compose -p chatbot-test -f docker-compose.test.yml exec -T postgres-test pg_isready -U chatbot_test_user -d chatbot_test > /dev/null 2>&1; then
             echo -e "${GREEN}PostgreSQL is ready!${NC}"
             break
         fi
@@ -142,7 +143,7 @@ start_base_containers() {
     # Wait for Redis
     echo "Waiting for Redis..."
     for i in {1..30}; do
-        if docker-compose -f docker-compose.test.yml exec -T redis-test redis-cli ping 2>/dev/null | grep -q PONG; then
+        if docker-compose -p chatbot-test -f docker-compose.test.yml exec -T redis-test redis-cli ping 2>/dev/null | grep -q PONG; then
             echo -e "${GREEN}Redis is ready!${NC}"
             break
         fi
@@ -180,33 +181,33 @@ start_e2e_stack() {
         BUILD_ARG="--build"
     fi
 
-    docker-compose -f docker-compose.test.yml --profile e2e up -d $BUILD_ARG backend-e2e celery-worker-test frontend-test
+    docker-compose -p chatbot-test -f docker-compose.test.yml --profile e2e up -d $BUILD_ARG backend-e2e celery-worker-test frontend-test
 
-    # Wait for backend to be healthy
+    # Wait for backend to be healthy (test backend on port 8004)
     echo "Waiting for backend API to be ready..."
     for i in {1..60}; do
-        if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        if curl -s http://localhost:8004/health > /dev/null 2>&1; then
             echo -e "${GREEN}Backend API is ready!${NC}"
             break
         fi
         if [ $i -eq 60 ]; then
             echo -e "${RED}Backend failed to start within 2 minutes${NC}"
-            docker-compose -f docker-compose.test.yml logs backend-e2e
+            docker-compose -p chatbot-test -f docker-compose.test.yml logs backend-e2e
             exit 1
         fi
         sleep 2
     done
 
-    # Wait for frontend to be ready
+    # Wait for frontend to be ready (test frontend on port 3001)
     echo "Waiting for frontend to be ready..."
     for i in {1..30}; do
-        if curl -s http://localhost:3000 > /dev/null 2>&1; then
+        if curl -s http://localhost:3001 > /dev/null 2>&1; then
             echo -e "${GREEN}Frontend is ready!${NC}"
             break
         fi
         if [ $i -eq 30 ]; then
             echo -e "${RED}Frontend failed to start within 1 minute${NC}"
-            docker-compose -f docker-compose.test.yml logs frontend-test
+            docker-compose -p chatbot-test -f docker-compose.test.yml logs frontend-test
             exit 1
         fi
         sleep 2
@@ -220,10 +221,10 @@ stop_test_containers() {
     cd "$PROJECT_ROOT"
     if [ "$KEEP_CONTAINERS" = false ]; then
         echo -e "${BLUE}Stopping test containers...${NC}"
-        docker-compose -f docker-compose.test.yml --profile e2e down -v 2>/dev/null || true
+        docker-compose -p chatbot-test -f docker-compose.test.yml --profile e2e down -v 2>/dev/null || true
     else
         echo -e "${YELLOW}Keeping test containers running${NC}"
-        echo "To stop: docker-compose -f docker-compose.test.yml --profile e2e down -v"
+        echo "To stop: docker-compose -p chatbot-test -f docker-compose.test.yml --profile e2e down -v"
     fi
 }
 
@@ -263,9 +264,21 @@ run_backend_tests() {
 
     cd "$PROJECT_ROOT/backend"
 
-    # Sync dependencies
+    # Check if .venv is valid, if not remove it
+    if [ -d ".venv" ]; then
+        if [ ! -f ".venv/bin/python" ] && [ ! -f ".venv/Scripts/python.exe" ]; then
+            echo -e "${YELLOW}Invalid .venv detected, removing...${NC}"
+            rm -rf .venv
+        fi
+    fi
+
+    # Sync dependencies (with retry on failure)
     echo "Syncing dependencies..."
-    uv sync --extra test
+    if ! uv sync --extra test 2>&1; then
+        echo -e "${YELLOW}uv sync failed, removing .venv and retrying...${NC}"
+        rm -rf .venv
+        uv sync --extra test
+    fi
 
     # Run migrations
     echo "Running database migrations..."
@@ -348,9 +361,9 @@ run_e2e_tests() {
     echo "Installing Playwright browsers..."
     npx playwright install chromium
 
-    # Run E2E tests
+    # Run E2E tests (using test ports: frontend=3001, backend=8004)
     echo "Running Playwright E2E tests..."
-    BASE_URL="http://localhost:3000" API_URL="http://localhost:8000" npx playwright test --reporter=html || E2E_RESULT=$?
+    BASE_URL="http://localhost:3001" API_URL="http://localhost:8004" npx playwright test --reporter=html || E2E_RESULT=$?
 
     cd "$PROJECT_ROOT"
 

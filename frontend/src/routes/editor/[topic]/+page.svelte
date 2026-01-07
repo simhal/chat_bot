@@ -2,9 +2,11 @@
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
     import { getEditorArticles, rejectArticle, publishArticle, downloadArticlePDF, getTopics, type Topic as TopicType } from '$lib/api';
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
+    import { navigationContext } from '$lib/stores/navigation';
+    import { actionStore, type UIAction, type ActionResult } from '$lib/stores/actions';
 
     // Shared localStorage key for topic persistence across analyst, editor, admin
     const SELECTED_TOPIC_KEY = 'selected_topic';
@@ -61,8 +63,12 @@
     // Get topic from URL parameter
     $: currentTopic = $page.params.topic;
 
-    // Save topic to localStorage when it changes
-    $: if (currentTopic) saveSelectedTopic(currentTopic);
+    // Save topic to localStorage when it changes and update navigation context
+    // Note: Don't clear articleId here - let toggleArticle/setArticle handle article selection
+    $: if (currentTopic) {
+        saveSelectedTopic(currentTopic);
+        navigationContext.setContext({ section: 'editor', topic: currentTopic, subNav: 'pending', role: 'editor' });
+    }
 
     // Current topic data
     $: currentTopicData = dbTopics.find(t => t.slug === currentTopic);
@@ -106,7 +112,7 @@
     async function handleRejectArticle(articleId: number) {
         try {
             error = '';
-            await rejectArticle(articleId);
+            await rejectArticle(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to reject article';
@@ -116,7 +122,7 @@
     async function handlePublishArticle(articleId: number) {
         try {
             error = '';
-            await publishArticle(articleId);
+            await publishArticle(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to publish article';
@@ -134,7 +140,7 @@
     async function handleDownloadPDF(articleId: number) {
         try {
             error = '';
-            await downloadArticlePDF(articleId);
+            await downloadArticlePDF(currentTopic, articleId);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to download PDF';
         }
@@ -145,12 +151,124 @@
         loadArticles();
     }
 
+    // Action handlers for chat-triggered UI actions
+    let actionUnsubscribers: (() => void)[] = [];
+
+    async function handleViewArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'view_article', error: 'No article ID specified' };
+        }
+        const article = articles.find(a => a.id === articleId);
+        if (article) {
+            selectedArticle = article;
+            // Update navigation context with article focus
+            navigationContext.setArticle(article.id, article.headline, article.keywords, article.status);
+            return { success: true, action: 'view_article', message: `Viewing article #${articleId}` };
+        }
+        return { success: false, action: 'view_article', error: `Article #${articleId} not found` };
+    }
+
+    async function handlePublishArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'publish_article', error: 'No article ID specified' };
+        }
+        try {
+            await handlePublishArticle(articleId);
+            // Close modal and clear context if the published article was selected
+            if (selectedArticle?.id === articleId) {
+                selectedArticle = null;
+                navigationContext.clearArticle();
+            }
+            return { success: true, action: 'publish_article', message: `Article #${articleId} published` };
+        } catch (e) {
+            return { success: false, action: 'publish_article', error: e instanceof Error ? e.message : 'Failed to publish' };
+        }
+    }
+
+    async function handleRejectArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'reject_article', error: 'No article ID specified' };
+        }
+        try {
+            await handleRejectArticle(articleId);
+            // Close modal and clear context if the rejected article was selected
+            if (selectedArticle?.id === articleId) {
+                selectedArticle = null;
+                navigationContext.clearArticle();
+            }
+            return { success: true, action: 'reject_article', message: `Article #${articleId} rejected` };
+        } catch (e) {
+            return { success: false, action: 'reject_article', error: e instanceof Error ? e.message : 'Failed to reject' };
+        }
+    }
+
+    async function handleSelectTopicAction(action: UIAction): Promise<ActionResult> {
+        const topic = action.params?.topic;
+        if (!topic) {
+            return { success: false, action: 'select_topic', error: 'No topic specified' };
+        }
+        switchTopic(topic);
+        return { success: true, action: 'select_topic', message: `Switched to ${topic} topic` };
+    }
+
+    async function handleDownloadPdfAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'download_pdf', error: 'No article ID specified' };
+        }
+        try {
+            await handleDownloadPDF(articleId);
+            return { success: true, action: 'download_pdf', message: `PDF downloaded for article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'download_pdf', error: e instanceof Error ? e.message : 'Failed to download PDF' };
+        }
+    }
+
+    async function handleCloseModalAction(action: UIAction): Promise<ActionResult> {
+        selectedArticle = null;
+        navigationContext.clearArticle();
+        return { success: true, action: 'close_modal', message: 'Modal closed' };
+    }
+
+    async function handleSelectArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'select_article', error: 'No article ID specified' };
+        }
+        const article = articles.find(a => a.id === articleId);
+        if (article) {
+            // Update navigation context with article focus (without showing modal)
+            navigationContext.setArticle(article.id, article.headline, article.keywords, article.status);
+            return { success: true, action: 'select_article', message: `Focused on article #${articleId}: ${article.headline}`, data: { article_id: article.id, headline: article.headline } };
+        }
+        return { success: false, action: 'select_article', error: `Article #${articleId} not found in current topic` };
+    }
+
     onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
             return;
         }
         await loadTopicsFromDb();
+
+        // Register action handlers for this page
+        actionUnsubscribers.push(
+            actionStore.registerHandler('view_article', handleViewArticleAction),
+            actionStore.registerHandler('publish_article', handlePublishArticleAction),
+            actionStore.registerHandler('reject_article', handleRejectArticleAction),
+            actionStore.registerHandler('select_topic', handleSelectTopicAction),
+            actionStore.registerHandler('download_pdf', handleDownloadPdfAction),
+            actionStore.registerHandler('close_modal', handleCloseModalAction),
+            actionStore.registerHandler('select_article', handleSelectArticleAction)
+        );
+    });
+
+    onDestroy(() => {
+        // Unregister action handlers
+        actionUnsubscribers.forEach(unsub => unsub());
     });
 </script>
 
@@ -198,7 +316,7 @@
             {#each articles as article}
                 <div class="article-card" class:inactive={!article.is_active}>
                     <div class="article-header">
-                        <h3>{article.headline}</h3>
+                        <h3 class="clickable-headline" on:click={() => navigationContext.toggleArticle(article.id, article.headline, article.keywords, article.status)} title="Click to focus/unfocus chat on this article">{article.headline}</h3>
                         <div class="badges">
                             <span class="status-badge status-{article.status}">
                                 {article.status}
@@ -248,7 +366,10 @@
                     <div class="article-actions">
                         <button
                             class="view-btn"
-                            on:click={() => selectedArticle = article}
+                            on:click={() => {
+                                selectedArticle = article;
+                                navigationContext.setArticle(article.id, article.headline, article.keywords, article.status);
+                            }}
                         >
                             View
                         </button>
@@ -273,11 +394,11 @@
 
 <!-- View Article Modal -->
 {#if selectedArticle}
-    <div class="modal-overlay" on:click={() => selectedArticle = null}>
+    <div class="modal-overlay" on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>
         <div class="modal large" on:click|stopPropagation>
             <div class="modal-header">
                 <h2>{selectedArticle.headline}</h2>
-                <button class="close-btn" on:click={() => selectedArticle = null}>×</button>
+                <button class="close-btn" on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>×</button>
             </div>
 
             <div class="modal-meta">
@@ -308,13 +429,13 @@
                 <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.id)}>
                     Download PDF
                 </button>
-                <button class="reject-btn" on:click={() => { handleRejectArticle(selectedArticle.id); selectedArticle = null; }}>
+                <button class="reject-btn" on:click={() => { handleRejectArticle(selectedArticle.id); selectedArticle = null; navigationContext.clearArticle(); }}>
                     Reject
                 </button>
-                <button class="publish-btn" on:click={() => { handlePublishArticle(selectedArticle.id); selectedArticle = null; }}>
+                <button class="publish-btn" on:click={() => { handlePublishArticle(selectedArticle.id); selectedArticle = null; navigationContext.clearArticle(); }}>
                     Publish
                 </button>
-                <button on:click={() => selectedArticle = null}>Close</button>
+                <button on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>Close</button>
             </div>
         </div>
     </div>
@@ -569,6 +690,14 @@
         font-size: 1.1rem;
         line-height: 1.4;
         flex: 1;
+    }
+
+    .article-header h3.clickable-headline {
+        cursor: pointer;
+    }
+
+    .article-header h3.clickable-headline:hover {
+        color: #3b82f6;
     }
 
     .badges {

@@ -1,10 +1,12 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, createEmptyArticle, downloadArticlePDF, approveArticle, getTopics, type Topic as TopicType } from '$lib/api';
-    import { onMount } from 'svelte';
+    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, createEmptyArticle, downloadArticlePDF, submitArticleForReview, getTopics, type Topic as TopicType } from '$lib/api';
+    import { onMount, onDestroy } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
+    import { navigationContext } from '$lib/stores/navigation';
+    import { actionStore, type UIAction, type ActionResult } from '$lib/stores/actions';
 
     // Shared localStorage key for topic persistence across analyst, editor, admin
     const SELECTED_TOPIC_KEY = 'selected_topic';
@@ -45,8 +47,12 @@
     // Get topic from URL parameter
     $: currentTopic = $page.params.topic;
 
-    // Save topic to localStorage when it changes
-    $: if (currentTopic) saveSelectedTopic(currentTopic);
+    // Save topic to localStorage when it changes and update navigation context
+    // Note: Don't clear articleId here - let toggleArticle/setArticle handle article selection
+    $: if (currentTopic) {
+        saveSelectedTopic(currentTopic);
+        navigationContext.setContext({ section: 'analyst', topic: currentTopic, subNav: 'drafts', role: 'analyst' });
+    }
 
     // Current topic data
     $: currentTopicData = dbTopics.find(t => t.slug === currentTopic);
@@ -105,7 +111,7 @@
 
         try {
             error = '';
-            await deleteArticle(articleId);
+            await deleteArticle(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to delete article';
@@ -115,17 +121,17 @@
     async function handleSubmitArticle(articleId: number) {
         try {
             error = '';
-            await approveArticle(articleId);
+            await submitArticleForReview(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
-            error = e instanceof Error ? e.message : 'Failed to approve article';
+            error = e instanceof Error ? e.message : 'Failed to submit article for review';
         }
     }
 
     async function handleReactivateArticle(articleId: number) {
         try {
             error = '';
-            await reactivateArticle(articleId);
+            await reactivateArticle(currentTopic, articleId);
             await loadArticles();
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to reactivate article';
@@ -160,7 +166,7 @@
     async function handleDownloadPDF(articleId: number) {
         try {
             error = '';
-            await downloadArticlePDF(articleId);
+            await downloadArticlePDF(currentTopic, articleId);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to download PDF';
         }
@@ -171,12 +177,125 @@
         loadArticles();
     }
 
+    // Action handlers for chat-triggered UI actions
+    let actionUnsubscribers: (() => void)[] = [];
+
+    async function handleCreateNewArticleAction(action: UIAction): Promise<ActionResult> {
+        try {
+            await handleCreateNewArticle();
+            return { success: true, action: 'create_new_article', message: 'New article created' };
+        } catch (e) {
+            return { success: false, action: 'create_new_article', error: e instanceof Error ? e.message : 'Failed to create article' };
+        }
+    }
+
+    async function handleViewArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'view_article', error: 'No article ID specified' };
+        }
+        const article = articles.find(a => a.id === articleId);
+        if (article) {
+            selectedArticle = article;
+            // Update navigation context with article focus
+            navigationContext.setArticle(article.id, article.headline, article.keywords, article.status);
+            return { success: true, action: 'view_article', message: `Viewing article #${articleId}` };
+        }
+        return { success: false, action: 'view_article', error: `Article #${articleId} not found` };
+    }
+
+    async function handleSelectArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'select_article', error: 'No article ID specified' };
+        }
+        const article = articles.find(a => a.id === articleId);
+        if (article) {
+            // Update navigation context with article focus (without showing modal)
+            navigationContext.setArticle(article.id, article.headline, article.keywords, article.status);
+            return { success: true, action: 'select_article', message: `Focused on article #${articleId}: ${article.headline}`, data: { article_id: article.id, headline: article.headline } };
+        }
+        return { success: false, action: 'select_article', error: `Article #${articleId} not found in current topic` };
+    }
+
+    async function handleEditArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'edit_article', error: 'No article ID specified' };
+        }
+        navigateToEditor(articleId);
+        return { success: true, action: 'edit_article', message: `Opening article #${articleId} for editing` };
+    }
+
+    async function handleSubmitArticleAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'submit_article', error: 'No article ID specified' };
+        }
+        try {
+            await handleSubmitArticle(articleId);
+            // Close modal and clear context if the submitted article was selected
+            if (selectedArticle?.id === articleId) {
+                selectedArticle = null;
+                navigationContext.clearArticle();
+            }
+            return { success: true, action: 'submit_article', message: `Article #${articleId} submitted for review` };
+        } catch (e) {
+            return { success: false, action: 'submit_article', error: e instanceof Error ? e.message : 'Failed to submit' };
+        }
+    }
+
+    async function handleSelectTopicAction(action: UIAction): Promise<ActionResult> {
+        const topic = action.params?.topic;
+        if (!topic) {
+            return { success: false, action: 'select_topic', error: 'No topic specified' };
+        }
+        switchTopic(topic);
+        return { success: true, action: 'select_topic', message: `Switched to ${topic} topic` };
+    }
+
+    async function handleDownloadPdfAction(action: UIAction): Promise<ActionResult> {
+        const articleId = action.params?.article_id;
+        if (!articleId) {
+            return { success: false, action: 'download_pdf', error: 'No article ID specified' };
+        }
+        try {
+            await handleDownloadPDF(articleId);
+            return { success: true, action: 'download_pdf', message: `PDF downloaded for article #${articleId}` };
+        } catch (e) {
+            return { success: false, action: 'download_pdf', error: e instanceof Error ? e.message : 'Failed to download PDF' };
+        }
+    }
+
+    async function handleCloseModalAction(action: UIAction): Promise<ActionResult> {
+        selectedArticle = null;
+        navigationContext.clearArticle();
+        return { success: true, action: 'close_modal', message: 'Modal closed' };
+    }
+
     onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
             return;
         }
         await loadTopicsFromDb();
+
+        // Register action handlers for this page
+        actionUnsubscribers.push(
+            actionStore.registerHandler('create_new_article', handleCreateNewArticleAction),
+            actionStore.registerHandler('view_article', handleViewArticleAction),
+            actionStore.registerHandler('edit_article', handleEditArticleAction),
+            actionStore.registerHandler('submit_article', handleSubmitArticleAction),
+            actionStore.registerHandler('select_topic', handleSelectTopicAction),
+            actionStore.registerHandler('download_pdf', handleDownloadPdfAction),
+            actionStore.registerHandler('close_modal', handleCloseModalAction),
+            actionStore.registerHandler('select_article', handleSelectArticleAction)
+        );
+    });
+
+    onDestroy(() => {
+        // Unregister action handlers
+        actionUnsubscribers.forEach(unsub => unsub());
     });
 </script>
 
@@ -226,7 +345,7 @@
             {#each articles as article}
                 <div class="article-card" class:inactive={!article.is_active}>
                     <div class="article-header">
-                        <h3>{article.headline}</h3>
+                        <h3 class="clickable-headline" on:click={() => navigationContext.toggleArticle(article.id, article.headline, article.keywords, article.status)} title="Click to focus/unfocus chat on this article">{article.headline}</h3>
                         <div class="badges">
                             <span class="status-badge status-{article.status}">
                                 {article.status}
@@ -276,7 +395,10 @@
                     <div class="article-actions">
                         <button
                             class="view-btn"
-                            on:click={() => selectedArticle = article}
+                            on:click={() => {
+                                selectedArticle = article;
+                                navigationContext.setArticle(article.id, article.headline, article.keywords, article.status);
+                            }}
                         >
                             View
                         </button>
@@ -318,11 +440,11 @@
 
 <!-- View Article Modal -->
 {#if selectedArticle}
-    <div class="modal-overlay" on:click={() => selectedArticle = null}>
+    <div class="modal-overlay" on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>
         <div class="modal large" on:click|stopPropagation>
             <div class="modal-header">
                 <h2>{selectedArticle.headline}</h2>
-                <button class="close-btn" on:click={() => selectedArticle = null}>×</button>
+                <button class="close-btn" on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>×</button>
             </div>
 
             <div class="modal-meta">
@@ -356,8 +478,8 @@
                 <button class="edit-modal-btn" on:click={() => navigateToEditor(selectedArticle.id)}>
                     Edit
                 </button>
-                <button class="submit-btn" on:click={() => { handleSubmitArticle(selectedArticle.id); selectedArticle = null; }}>Submit</button>
-                <button on:click={() => selectedArticle = null}>Close</button>
+                <button class="submit-btn" on:click={() => { handleSubmitArticle(selectedArticle.id); selectedArticle = null; navigationContext.clearArticle(); }}>Submit</button>
+                <button on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>Close</button>
             </div>
         </div>
     </div>
@@ -614,6 +736,14 @@
         font-size: 1.1rem;
         line-height: 1.4;
         flex: 1;
+    }
+
+    .article-header h3.clickable-headline {
+        cursor: pointer;
+    }
+
+    .article-header h3.clickable-headline:hover {
+        color: #3b82f6;
     }
 
     .badges {

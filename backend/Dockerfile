@@ -21,14 +21,15 @@ COPY pyproject.toml uv.lock* ./
 RUN uv sync --no-cache
 
 # Copy application code
-COPY main.py database.py models.py auth.py redis_client.py ./
-COPY conversation_memory.py chatbot_agent.py seed_db.py dependencies.py ./
+COPY main.py database.py models.py auth.py redis_client.py celery_app.py ./
+COPY conversation_memory.py seed_db.py dependencies.py observability.py ./
 COPY .env ./
 
 # Copy multi-agent system directories
 COPY services ./services
 COPY api ./api
 COPY agents ./agents
+COPY tasks ./tasks
 
 # Copy Alembic files for database migrations
 COPY alembic.ini ./

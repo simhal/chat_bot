@@ -27,12 +27,13 @@ This is a full-stack AI chatbot application with LinkedIn OAuth authentication, 
 - `main.py` - FastAPI application entry point
 - `models.py` - SQLAlchemy database models
 - `auth.py` - OAuth authentication logic
-- `chatbot_agent.py` - LangGraph agent implementation
 - `database.py` - Database connection and session management
 - `redis_client.py` - Redis connection utilities
-- `services/` - Business logic services (content, vector search)
-- `agents/` - AI agent implementations
+- `celery_app.py` - Celery worker configuration
+- `services/` - Business logic services (content, vector search, agent orchestration)
+- `agents/` - Multi-agent AI system (MainChatAgent, AnalystAgent, EditorSubAgent, etc.)
 - `api/` - API route handlers
+- `tasks/` - Celery background tasks for heavy agent workflows
 - `alembic/` - Database migration scripts
 
 ### Frontend (`/frontend`)
@@ -152,10 +153,10 @@ Required variables:
 4. Apply migration: `uv run alembic upgrade head`
 
 ### Adding AI Agent Capabilities
-1. Define agent logic in `backend/agents/` or extend `chatbot_agent.py`
+1. Define agent logic in `backend/agents/` (extend existing agent classes)
 2. Use LangGraph for complex multi-step agent workflows
 3. Integrate with ChromaDB for retrieval-augmented generation (RAG)
-4. Update agent invocation in API endpoints
+4. Update agent invocation in `services/agent_service.py`
 
 ### Working with Vector Search
 1. Content is stored in ChromaDB via `backend/services/vector_service.py`
@@ -182,11 +183,17 @@ Required variables:
 ```
 chatbot-app/
 ├── backend/                 # Python FastAPI backend
-│   ├── agents/             # AI agent implementations
+│   ├── agents/             # Multi-agent AI system
+│   │   ├── main_chat_agent.py    # Orchestrator agent
+│   │   ├── analyst_agent.py      # Research workflows
+│   │   ├── editor_sub_agent.py   # Publishing with HITL
+│   │   └── tools/                # Agent tools registry
 │   ├── alembic/            # Database migrations
 │   ├── api/                # API route handlers
 │   ├── services/           # Business logic services
+│   ├── tasks/              # Celery background tasks
 │   ├── main.py             # FastAPI app entry point
+│   ├── celery_app.py       # Celery worker configuration
 │   ├── models.py           # SQLAlchemy & Pydantic models
 │   ├── auth.py             # OAuth authentication
 │   ├── database.py         # Database setup
@@ -200,13 +207,16 @@ chatbot-app/
 │   │   │   └── api.ts     # API client
 │   │   └── routes/        # SvelteKit routes
 │   │       ├── +page.svelte              # Chat interface
-│   │       ├── admin/content/            # Admin panel
+│   │       ├── analyst/                  # Analyst workflow pages
+│   │       ├── editor/                   # Editor workflow pages
+│   │       ├── admin/                    # Admin panels
 │   │       └── auth/callback/            # OAuth callback
 │   ├── package.json
 │   └── Dockerfile
+├── docs/                   # Architecture documentation
 ├── docker-compose.yml      # Multi-container setup
 ├── README.md              # Project documentation
-└── Claude.md              # This file
+└── CLAUDE.md              # This file
 ```
 
 ## Troubleshooting
@@ -232,3 +242,9 @@ chatbot-app/
 - Verify redirect URI matches LinkedIn app settings exactly
 - Check that client ID is correct in both backend and frontend
 - Review network tab in browser for OAuth flow errors
+
+### Celery Worker Issues
+- Check worker logs: `docker-compose logs celery-worker`
+- Verify Redis is running and accessible
+- Check task status via `/api/tasks/{task_id}` endpoint
+- Restart workers: `docker-compose restart celery-worker`

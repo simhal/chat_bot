@@ -159,22 +159,22 @@ class TestRoleBasedAccess:
                 f"{method} {endpoint} should be forbidden for readers"
 
     def test_reader_cannot_create_content(
-        self, client: TestClient, auth_headers, test_topic, mock_redis
+        self, client: TestClient, auth_headers, test_topic, mock_redis, mock_chromadb
     ):
         """Test that readers cannot create articles."""
         response = client.post(
-            f"/api/content/article/new/{test_topic.slug}",
+            f"/api/analyst/{test_topic.slug}/article",
             headers=auth_headers
         )
-        # Should be forbidden (403) or internal error due to permission check (500)
-        assert response.status_code in [401, 403, 500]
+        # Should be forbidden (403) - readers don't have analyst permission
+        assert response.status_code == 403
 
     def test_reader_can_view_published_content(
-        self, client: TestClient, auth_headers, published_article, mock_redis
+        self, client: TestClient, auth_headers, test_topic, published_article, mock_redis
     ):
         """Test that readers can view published articles."""
         response = client.get(
-            f"/api/content/article/{published_article.id}",
+            f"/api/reader/{test_topic.slug}/article/{published_article.id}",
             headers=auth_headers
         )
         assert response.status_code == 200
@@ -184,26 +184,29 @@ class TestRoleBasedAccess:
     ):
         """Test that analysts can create articles in their topic."""
         response = client.post(
-            f"/api/content/article/new/{test_topic.slug}",
+            f"/api/analyst/{test_topic.slug}/article",
             headers=analyst_headers
         )
-        # Success (200) or internal error if topic lookup fails (500)
-        assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        assert "id" in data
+        assert data["status"] == "draft"
 
     def test_editor_can_reject_article(
-        self, client: TestClient, editor_headers, test_article, db_session, mock_redis, mock_chromadb
+        self, client: TestClient, editor_headers, test_topic, test_article, db_session, mock_redis, mock_chromadb
     ):
         """Test that editors can reject articles."""
         test_article.status = ArticleStatus.EDITOR
         db_session.commit()
 
         response = client.post(
-            f"/api/content/article/{test_article.id}/reject",
+            f"/api/editor/{test_topic.slug}/article/{test_article.id}/reject",
             json={"reason": "Needs revision"},
             headers=editor_headers
         )
-        # Success (200) or internal error if topic lookup fails (500)
-        assert response.status_code in [200, 500]
+        assert response.status_code == 200
+        data = response.json()
+        assert data["article"]["status"] == "draft"
 
     def test_admin_can_manage_users(
         self, client: TestClient, admin_headers, mock_redis
@@ -390,9 +393,9 @@ class TestProtectedEndpoints:
     def test_content_management_requires_auth(self, client: TestClient, test_topic):
         """Test that content management endpoints require authentication."""
         endpoints = [
-            ("GET", f"/api/content/articles/{test_topic.slug}"),
-            ("GET", f"/api/content/analyst/articles/{test_topic.slug}"),
-            ("GET", f"/api/content/editor/articles/{test_topic.slug}"),
+            ("GET", f"/api/reader/{test_topic.slug}/articles"),
+            ("GET", f"/api/analyst/{test_topic.slug}/articles"),
+            ("GET", f"/api/editor/{test_topic.slug}/articles"),
         ]
 
         for method, endpoint in endpoints:

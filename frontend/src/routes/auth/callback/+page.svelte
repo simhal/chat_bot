@@ -44,6 +44,20 @@
                 return;
             }
 
+            // CSRF Protection: Validate state parameter
+            const storedState = sessionStorage.getItem('oauth_state');
+            sessionStorage.removeItem('oauth_state');  // Clear immediately after retrieval
+
+            if (!state || !storedState || state !== storedState) {
+                error = 'Invalid state parameter. This may indicate a CSRF attack. Please try logging in again.';
+                loading = false;
+                console.error('OAuth state mismatch - possible CSRF attack', {
+                    receivedState: state ? 'present' : 'missing',
+                    storedState: storedState ? 'present' : 'missing'
+                });
+                return;
+            }
+
             // Exchange code for tokens via our backend (keeps client_secret secure)
             const tokenResponse = await fetch(`${PUBLIC_API_URL}/api/auth/token`, {
                 method: 'POST',
