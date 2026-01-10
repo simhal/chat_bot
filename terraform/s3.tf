@@ -53,6 +53,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "resources" {
     id     = "delete-old-versions"
     status = "Enabled"
 
+    filter {} # Apply to all objects
+
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
@@ -61,6 +63,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "resources" {
   rule {
     id     = "transition-to-ia"
     status = "Enabled"
+
+    filter {} # Apply to all objects
 
     transition {
       days          = 90
