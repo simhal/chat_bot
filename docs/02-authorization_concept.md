@@ -382,4 +382,4 @@ Can:
 - [Authentication](./01-authentication.md) - OAuth flow and JWT tokens
 - [User Management](./04-user-management.md) - Group assignments
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - Agent tool permissions
-- [User Workflows](./14-user-workflows.md) - Role-specific workflows
+- [User Workflows](./13-user-workflows.md) - Role-specific workflows

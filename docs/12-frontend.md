@@ -316,7 +316,7 @@ The application tracks the user's current location for context-aware AI assistan
 
 ## Related Documentation
 
-- [User Workflows](./14-user-workflows.md) - Step-by-step workflow guides
-- [UI Actions](./15-ui-actions.md) - Chat-triggered UI commands
+- [User Workflows](./13-user-workflows.md) - Step-by-step workflow guides
+- [UI Actions](./14-ui-actions.md) - Chat-triggered UI commands
 - [Authorization](./02-authorization_concept.md) - Permission system
 - [Architecture Diagrams](./diagrams/frontend-architecture.mmd) - Frontend component diagram

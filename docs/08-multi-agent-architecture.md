@@ -521,7 +521,7 @@ backend/agents/
 - [Authentication](./01-authentication.md) - OAuth and JWT system
 - [Authorization](./02-authorization_concept.md) - Permissions and access control
 - [User Management](./04-user-management.md) - User roles and groups
-- [UI Actions](./15-ui-actions.md) - Frontend UI action handling
+- [UI Actions](./14-ui-actions.md) - Frontend UI action handling
 - [Unit Testing](./07-unit-testing.md) - Testing strategies
 
 ---

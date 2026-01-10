@@ -362,7 +362,7 @@ uv run alembic current
 
 ## Related Documentation
 
-- [Resources](./10-resources-concept.md) - Resource storage and management
-- [Redis Cache](./12-redis-cache.md) - Caching layer
+- [Resources](./09-resources-concept.md) - Resource storage and management
+- [Redis Cache](./11-redis-cache.md) - Caching layer
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - ChromaDB usage for context
 - [Architecture Diagrams](./diagrams/system-architecture.mmd) - System component diagram

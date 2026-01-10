@@ -333,5 +333,5 @@ The platform logs warnings when Redis is unavailable and automatically reconnect
 ## Related Documentation
 
 - [Authentication](./01-authentication.md) - Token management
-- [Databases](./11-databases.md) - Storage architecture
+- [Databases](./10-databases.md) - Storage architecture
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - LangGraph checkpointing

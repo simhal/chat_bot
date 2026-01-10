@@ -342,4 +342,4 @@ Returns service status including database and cache connectivity.
 - [Authentication](./01-authentication.md) - OAuth and JWT details
 - [Authorization](./02-authorization_concept.md) - Permission system
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - Chat and agent system
-- [Databases](./11-databases.md) - Data storage
+- [Databases](./10-databases.md) - Data storage

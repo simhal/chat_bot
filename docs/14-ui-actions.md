@@ -42,17 +42,9 @@ Common parameters include: `article_id`, `topic`, `rating`, `search_query`, `res
 
 ## Required Roles
 
-Access to pages and actions is controlled by user scopes. Each user can have multiple scopes assigned through groups.
+Access to pages and actions is controlled by user scopes. Each user can have multiple scopes assigned through groups. Scopes follow the pattern `{topic}:{role}` or `global:{role}`.
 
-### Scope Format
-
-Scopes follow the pattern `{topic}:{role}` or `global:{role}`:
-
-- `macro:reader` - Reader access to the "macro" topic
-- `macro:analyst` - Analyst access to the "macro" topic
-- `macro:editor` - Editor access to the "macro" topic
-- `macro:admin` - Admin access to the "macro" topic
-- `global:admin` - Global administrator (access to all topics and system settings)
+For complete scope format details, role definitions, and the permission hierarchy, see Authorization documentation (02-authorization_concept.md).
 
 ### Page Access Requirements
 
@@ -359,7 +351,7 @@ This allows the chatbot to generate article drafts and insert them directly into
 
 ## Related Documentation
 
-- [User Workflows](./14-user-workflows.md) - Complete workflow guides
-- [Frontend](./13-frontend.md) - Page structure and navigation
+- [User Workflows](./13-user-workflows.md) - Complete workflow guides
+- [Frontend](./12-frontend.md) - Page structure and navigation
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - Agent system
 - [Authorization](./02-authorization_concept.md) - Permission requirements

@@ -86,14 +86,7 @@ The platform maintains a standard set of groups covering all topic-role combinat
 | **Fixed Income** | `fixed_income:admin` | `fixed_income:analyst` | `fixed_income:editor` | `fixed_income:reader` |
 | **ESG** | `esg:admin` | `esg:analyst` | `esg:editor` | `esg:reader` |
 
-### Role Definitions
-
-| Role | Purpose | Typical Responsibilities |
-|------|---------|-------------------------|
-| **admin** | Full topic control | Manage users, resources, all content operations |
-| **analyst** | Content creation | Write and edit draft articles, manage resources |
-| **editor** | Content review | Review submissions, approve/reject, publish |
-| **reader** | Content consumption | View published articles only |
+For detailed role definitions, capabilities, and the complete permission hierarchy, see Authorization documentation (02-authorization_concept.md).
 
 ---
 
@@ -470,6 +463,6 @@ Since authentication is via LinkedIn:
 
 ## Related Documentation
 
-- [Authentication](./01-authentication.md) - OAuth and JWT tokens
-- [Authorization](./02-authorization_concept.md) - Permission system
-- [Topic Structure](./03-topic-structure.md) - Topic-based organization
+- Authentication (01-authentication.md) - OAuth and JWT tokens
+- Authorization (02-authorization_concept.md) - Permission system
+- Topic Structure (03-topic-structure.md) - Topic-based organization

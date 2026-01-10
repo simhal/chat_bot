@@ -17,29 +17,12 @@ This document describes all user workflows in the application, organized by user
 
 ## 1. User Roles Overview
 
-### Scope-Based Permission System
+The platform uses a scope-based permission system where users are assigned scopes in the format `{topic}:{role}`. Roles include reader, analyst, editor, and admin levels, with `global:admin` providing system-wide access.
 
-Users are assigned scopes in the format `{topic}:{role}`:
-
-| Role | Scope Format | Capabilities |
-|------|--------------|--------------|
-| Reader | `{topic}:reader` | Browse, search, read, rate articles |
-| Analyst | `{topic}:analyst` | Reader + create, edit, submit articles |
-| Editor | `{topic}:editor` | Reader + review, reject, publish articles |
-| Topic Admin | `{topic}:admin` | All topic operations + content management |
-| Global Admin | `global:admin` | All operations across all topics |
-
-### Role Hierarchy
-
-```
-global:admin
-    └── {topic}:admin
-            └── {topic}:editor
-                    └── {topic}:analyst
-                            └── {topic}:reader
-```
+Each workflow section below indicates the required scope for that functionality. For complete role definitions, capabilities matrix, and scope format details, see Authorization documentation (02-authorization_concept.md).
 
 ---
+
 
 ## 2. Authentication Workflows
 
@@ -441,6 +424,6 @@ Complex requests run synchronously:
 ## Related Documentation
 
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - System design
-- [Frontend](./13-frontend.md) - Navigation and components
-- [UI Actions](./15-ui-actions.md) - Chat-triggered actions
+- [Frontend](./12-frontend.md) - Navigation and components
+- [UI Actions](./14-ui-actions.md) - Chat-triggered actions
 - [Authorization](./02-authorization_concept.md) - Permission system

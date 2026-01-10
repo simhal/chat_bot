@@ -288,4 +288,4 @@ When access token expires:
 
 - [Authorization](./02-authorization_concept.md) - Permission system and role hierarchy
 - [User Management](./04-user-management.md) - User accounts and groups
-- [Redis Cache](./12-redis-cache.md) - Token registry implementation
+- [Redis Cache](./11-redis-cache.md) - Token registry implementation

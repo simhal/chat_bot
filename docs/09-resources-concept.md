@@ -651,6 +651,6 @@ Resources can be dragged into the article editor:
 
 ## Related Documentation
 
-- [Databases](./11-databases.md) - Storage architecture
+- [Databases](./10-databases.md) - Storage architecture
 - [Authorization](./02-authorization_concept.md) - Resource access permissions
 - [Topic Structure](./03-topic-structure.md) - Topic-based organization

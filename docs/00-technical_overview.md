@@ -1,22 +1,10 @@
-# AI Research Chatbot Platform Documentation
+# AI Research Chatbot Platform
 
 ## Overview
 
 This platform is a full-stack AI-powered research chatbot application designed for financial analysis and content management. It combines multi-agent AI systems, semantic search, and a comprehensive editorial workflow to deliver personalized research insights across multiple financial domains.
 
-## Architecture Diagram
-
-See the interactive diagrams in [diagrams/](./diagrams/) for visual representations:
-
-- [System Architecture](./diagrams/system-architecture.mmd) - High-level system components
-- [Data Flow](./diagrams/data-flow.mmd) - Request/response data flow
-- [Multi-Agent Workflow](./diagrams/multi-agent-workflow.mmd) - LangGraph agent workflow
-- [Permission Model](./diagrams/permission-model.mmd) - Role hierarchy and scopes
-- [Article Lifecycle](./diagrams/article-lifecycle.mmd) - Content workflow states
-- [Authentication Flow](./diagrams/authentication-flow.mmd) - OAuth sequence
-- [HITL Workflow](./diagrams/hitl-workflow.mmd) - Human-in-the-loop approval
-- [Frontend Architecture](./diagrams/frontend-architecture.mmd) - SvelteKit structure
-- [API Routes](./diagrams/api-routes.mmd) - Endpoint organization
+---
 
 ## Technology Stack
 
@@ -33,53 +21,55 @@ See the interactive diagrams in [diagrams/](./diagrams/) for visual representati
 | **Package Management** | uv (Python), npm (Node.js) | Fast dependency management |
 | **Containerization** | Docker Compose | Local development and deployment |
 
-## Core Features
+---
 
-### 1. Multi-Agent AI Chat System
-- **Intent Router**: Analyzes user queries and routes to appropriate handlers
-- **Specialist Agents**: Research agents with domain-specific tools
-- **HITL Workflow**: Human approval for article publishing
-- **Context-Aware Responses**: ChromaDB-powered semantic search
-- **Conversation Memory**: Redis-backed persistent chat history
+## Core Capabilities
 
-### 2. Content Management System
-- **Article Lifecycle**: Draft → Editor → Published workflow
-- **AI-Assisted Writing**: Analyst agents help create research content
-- **Resource Management**: Images, PDFs, tables, data files
-- **Topic Organization**: Content organized by research domains
+### Multi-Agent AI Chat System
+- Intent-based routing to specialized handler nodes
+- Domain-specific research agents with dedicated tools
+- Human-in-the-loop (HITL) workflow for critical actions
+- ChromaDB-powered semantic search for context retrieval
+- Redis-backed conversation memory
 
-### 3. Role-Based Access Control
-- **Topic-Scoped Permissions**: Per-topic role assignments
-- **Role Hierarchy**: admin > analyst > editor > reader
-- **API Endpoint Security**: Role-based URL structure
-- **JWT Authorization**: Scoped tokens with permission encoding
+### Content Management
+- Editorial workflow: Draft, Editor Review, Published
+- AI-assisted article creation and research
+- Resource management for images, PDFs, tables, and data files
+- Topic-based content organization
 
-## Topic Structure
+### Access Control
+- Topic-scoped role-based permissions
+- Role hierarchy: admin, analyst, editor, reader
+- JWT tokens with embedded permission scopes
+- API endpoint security by role
 
-The platform organizes research into configurable topics (e.g., Macro, Equity, Fixed Income, ESG). Each topic has:
-- Dedicated permission groups (`{topic}:admin`, `{topic}:analyst`, etc.)
-- Separate content collections
-- Topic-specific prompts and settings
+---
 
-## Data Flow Overview
+## Research Topics
 
-### Chat Interaction
-```
-User Message → JWT Validation → MainChatAgent → Intent Router
-    → Handler/SubAgent → ChromaDB Context → LLM Response
-```
+The platform organizes content into configurable research domains:
 
-### Content Creation
-```
-Analyst Request → Background Task → Research Agents → Article Draft
-    → ChromaDB Embedding → PostgreSQL Metadata
-```
+| Topic | Focus Area |
+|-------|------------|
+| **Macroeconomic** | GDP, inflation, monetary policy, central bank actions |
+| **Equity** | Stock analysis, valuations, sector trends, earnings |
+| **Fixed Income** | Bond markets, yields, credit spreads, duration |
+| **ESG** | Environmental, social, governance factors |
 
-### Publishing Workflow
-```
-Submit for Review → Editor Review → HITL Approval
-    → Publish (with interrupt) → Human Confirm → Published
-```
+Each topic has dedicated permission groups, content collections, and configurable prompts.
+
+---
+
+## User Roles
+
+| Role | Capabilities |
+|------|--------------|
+| **Reader** | View published articles, use chat interface, rate articles |
+| **Analyst** | Create content, upload resources, submit for review |
+| **Editor** | Review articles, request changes, publish content |
+| **Admin** | Full topic access, content moderation, user management |
+| **Global Admin** | System-wide administration, all topic access |
 
 ---
 
@@ -87,56 +77,60 @@ Submit for Review → Editor Review → HITL Approval
 
 ### Core Concepts
 
-1. **[Authentication](./01-authentication.md)**
-   OAuth flow, JWT tokens, LinkedIn integration
-
-2. **[Authorization & Permissions](./02-authorization_concept.md)**
-   Role-based access control, scopes, permission hierarchy
-
-3. **[Topic Structure](./03-topic-structure.md)**
-   Research domains, topic configuration, content organization
-
-4. **[User Management](./04-user-management.md)**
-   User accounts, groups, role assignments
+| Chapter | Topic | Description |
+|---------|-------|-------------|
+| 01 | Authentication | OAuth flow, JWT tokens, LinkedIn integration, token lifecycle |
+| 02 | Authorization | Role-based access control, scopes, permission hierarchy |
+| 03 | Topic Structure | Research domains, topic configuration, content organization |
+| 04 | User Management | User accounts, groups, role assignments, preferences |
 
 ### Backend Architecture
 
-5. **[FastAPI Backend](./05-fastapi_backend.md)**
-   API structure, endpoints, middleware, dependencies
-
-6. **[Security](./06-security.md)**
-   Security measures and best practices
-
-7. **[Testing](./07-unit-testing.md)**
-   Unit tests, integration tests, test infrastructure
+| Chapter | Topic | Description |
+|---------|-------|-------------|
+| 05 | FastAPI Backend | API structure, endpoints, middleware, dependencies |
+| 06 | Security | Security headers, input validation, data protection |
+| 07 | Testing | Unit tests, integration tests, test infrastructure |
 
 ### AI System
 
-8. **[Multi-Agent Architecture](./08-multi-agent-architecture.md)**
-   LangGraph workflow, agent hierarchy, state management, HITL
+| Chapter | Topic | Description |
+|---------|-------|-------------|
+| 08 | Multi-Agent Architecture | LangGraph workflow, agent hierarchy, state management, HITL |
 
+### Content and Storage
 
-### Content & Storage
+| Chapter | Topic | Description |
+|---------|-------|-------------|
+| 09 | Resources | Resource types, file management, article attachments |
+| 10 | Databases | PostgreSQL schema, ChromaDB collections, data models |
+| 11 | Redis Cache | Token registry, content cache, session storage |
 
-10. **[Resources](./10-resources-concept.md)**
-    Resource types, file management, article attachments
+### Frontend and User Experience
 
-11. **[Databases](./11-databases.md)**
-    PostgreSQL schema, ChromaDB collections, data models
+| Chapter | Topic | Description |
+|---------|-------|-------------|
+| 12 | Frontend | SvelteKit structure, pages, components, stores |
+| 13 | User Workflows | Step-by-step guides for all user roles |
+| 14 | UI Actions | Chat-triggered UI commands, navigation context |
 
-12. **[Redis Cache](./12-redis-cache.md)**
-    Token registry, content cache, session storage
+---
 
-### Frontend & UX
+## Architecture Diagrams
 
-13. **[Frontend](./13-frontend.md)**
-    SvelteKit structure, pages, components, stores
+Visual representations are available in the diagrams directory:
 
-14. **[User Workflows](./14-user-workflows.md)**
-    Step-by-step guides for all user roles
-
-15. **[UI Actions](./15-ui-actions.md)**
-    Chat-triggered UI commands, navigation context
+| Diagram | Description |
+|---------|-------------|
+| system-architecture.mmd | High-level system components |
+| data-flow.mmd | Request/response data flow |
+| multi-agent-workflow.mmd | LangGraph agent workflow |
+| permission-model.mmd | Role hierarchy and scopes |
+| article-lifecycle.mmd | Content workflow states |
+| authentication-flow.mmd | OAuth sequence |
+| hitl-workflow.mmd | Human-in-the-loop approval |
+| frontend-architecture.mmd | SvelteKit structure |
+| api-routes.mmd | Endpoint organization |
 
 ---
 
@@ -144,20 +138,8 @@ Submit for Review → Editor Review → HITL Approval
 
 Contact your system administrator for access credentials and the application URL.
 
-### User Roles
-
-| Role | Capabilities |
-|------|-------------|
-| **Reader** | View published articles, use chat interface, rate articles |
-| **Analyst** | Create content, upload resources, submit for review |
-| **Editor** | Review articles, request changes, publish content |
-| **Admin** | Full topic access, content moderation, user management |
-| **Global Admin** | System-wide administration, topic management |
+---
 
 ## Support
 
 For technical support or access requests, contact your organization's IT administrator.
-
-## License
-
-Proprietary - All rights reserved.

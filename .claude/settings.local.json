@@ -116,7 +116,16 @@
       "Bash(npm run check:*)",
       "Bash(MSYS_NO_PATHCONV=1 docker exec:*)",
       "Bash(timeout 60 docker-compose logs:*)",
-      "Bash(timeout 30 docker-compose logs:*)"
+      "Bash(timeout 30 docker-compose logs:*)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" pr status)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git tag:*)",
+      "Bash(aws elbv2 describe-target-groups:*)",
+      "Bash(aws ecr describe-images:*)",
+      "Bash(git log:*)",
+      "Bash(aws ecs execute-command:*)",
+      "Bash(docker images:*)"
     ]
   }
 }
