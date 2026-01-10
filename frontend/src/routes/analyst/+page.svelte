@@ -2,7 +2,7 @@
     import { auth } from '$lib/stores/auth';
     import { goto } from '$app/navigation';
     import { onMount } from 'svelte';
-    import { getTopics } from '$lib/api';
+    import { getEntitledTopics } from '$lib/api';
 
     // Shared localStorage key for topic persistence across analyst, editor, admin
     const SELECTED_TOPIC_KEY = 'selected_topic';
@@ -14,14 +14,6 @@
         return null;
     }
 
-    function hasTopicAccess(topic: string): boolean {
-        if (!$auth.user?.scopes) return false;
-        // Global admin can access all topics
-        if ($auth.user.scopes.includes('global:admin')) return true;
-        // Or analyst role grants access
-        return $auth.user.scopes.includes(`${topic}:analyst`);
-    }
-
     onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
@@ -29,27 +21,25 @@
         }
 
         try {
-            // Load topics from database
-            const dbTopics = await getTopics(); // Show all topics
-            const sortedTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
+            // Load topics user has analyst access to (backend filters by entitlements)
+            const entitledTopics = await getEntitledTopics('analyst');
+            const sortedTopics = entitledTopics.sort((a, b) => a.sort_order - b.sort_order);
+
+            if (sortedTopics.length === 0) {
+                // No analyst permissions for any topic, redirect home
+                goto('/');
+                return;
+            }
 
             // Check for saved topic first
             const savedTopic = getSavedTopic();
-            if (savedTopic && sortedTopics.some(t => t.slug === savedTopic && hasTopicAccess(t.slug))) {
+            if (savedTopic && sortedTopics.some(t => t.slug === savedTopic)) {
                 goto(`/analyst/${savedTopic}`);
                 return;
             }
 
-            // Find first available topic for user
-            const firstTopic = sortedTopics.find(topic => hasTopicAccess(topic.slug));
-
-            if (firstTopic) {
-                // Redirect to first available topic
-                goto(`/analyst/${firstTopic.slug}`);
-            } else {
-                // No analyst permissions, redirect home
-                goto('/');
-            }
+            // Redirect to first available topic
+            goto(`/analyst/${sortedTopics[0].slug}`);
         } catch (e) {
             console.error('Error loading topics:', e);
             goto('/');

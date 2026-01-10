@@ -2,7 +2,7 @@
     import { auth } from '$lib/stores/auth';
     import { goto } from '$app/navigation';
     import { onMount } from 'svelte';
-    import { getTopics } from '$lib/api';
+    import { getEntitledTopics } from '$lib/api';
 
     // Shared localStorage key for topic persistence across analyst, editor, admin
     const SELECTED_TOPIC_KEY = 'selected_topic';
@@ -14,14 +14,6 @@
         return null;
     }
 
-    function hasEditorAccess(topic: string, scopes: string[]): boolean {
-        if (!scopes.length) return false;
-        // Global admin can access all topics
-        if (scopes.includes('global:admin')) return true;
-        // Or users with explicit editor role for that topic
-        return scopes.includes(`${topic}:editor`);
-    }
-
     onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
@@ -29,26 +21,25 @@
         }
 
         try {
-            // Load topics from database
-            const dbTopics = await getTopics(); // Show all topics
-            const sortedTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
+            // Load topics user has editor access to (backend filters by entitlements)
+            const entitledTopics = await getEntitledTopics('editor');
+            const sortedTopics = entitledTopics.sort((a, b) => a.sort_order - b.sort_order);
 
-            const scopes = $auth.user?.scopes || [];
+            if (sortedTopics.length === 0) {
+                // No editor permissions for any topic, redirect home
+                goto('/');
+                return;
+            }
 
             // Check for saved topic first
             const savedTopic = getSavedTopic();
-            if (savedTopic && sortedTopics.some(t => t.slug === savedTopic && hasEditorAccess(t.slug, scopes))) {
+            if (savedTopic && sortedTopics.some(t => t.slug === savedTopic)) {
                 goto(`/editor/${savedTopic}`);
                 return;
             }
 
-            const firstTopic = sortedTopics.find(topic => hasEditorAccess(topic.slug, scopes));
-            if (firstTopic) {
-                goto(`/editor/${firstTopic.slug}`);
-            } else {
-                // User has no editor access to any topic
-                goto('/');
-            }
+            // Redirect to first available topic
+            goto(`/editor/${sortedTopics[0].slug}`);
         } catch (e) {
             console.error('Error loading topics:', e);
             goto('/');

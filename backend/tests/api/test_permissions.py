@@ -201,7 +201,7 @@ class TestRoleBasedAccess:
 
         response = client.post(
             f"/api/editor/{test_topic.slug}/article/{test_article.id}/reject",
-            json={"reason": "Needs revision"},
+            json={"feedback": "Needs revision"},
             headers=editor_headers
         )
         assert response.status_code == 200

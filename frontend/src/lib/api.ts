@@ -404,6 +404,16 @@ export async function getArticle(topic: string, articleId: number) {
     return apiRequest(`/api/reader/${topic}/article/${articleId}`);
 }
 
+// Analyst can get articles in any status (draft, editor, published)
+export async function getAnalystArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/analyst/${topic}/article/${articleId}`);
+}
+
+// Editor can get articles in editor or published status
+export async function getEditorArticle(topic: string, articleId: number) {
+    return apiRequest(`/api/editor/${topic}/article/${articleId}`);
+}
+
 export async function downloadArticlePDF(topic: string, articleId: number) {
     const authState = get(auth);
 
@@ -1082,6 +1092,15 @@ export async function getTopics(activeOnly: boolean = false, visibleOnly: boolea
     if (visibleOnly) params.append('visible_only', 'true');
     const query = params.toString();
     return apiRequest(`/api/topics${query ? '?' + query : ''}`);
+}
+
+// Get topics user is entitled to at the specified role level
+// - reader: visible topics where user has reader access (or higher)
+// - analyst: topics where user has analyst access (or higher)
+// - editor: topics where user has editor access (or higher)
+// - admin: topics where user has admin access
+export async function getEntitledTopics(role: 'reader' | 'analyst' | 'editor' | 'admin'): Promise<Topic[]> {
+    return apiRequest(`/api/topics/entitled?role=${role}`);
 }
 
 // Get public topics (no auth required)

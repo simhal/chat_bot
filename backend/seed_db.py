@@ -9,7 +9,19 @@ import sys
 
 
 # Define topics with their metadata
+# Note: "global" is a special system topic for system-wide content
+# It cannot be deleted and is always created first
 TOPICS = [
+    {
+        "slug": "global",
+        "title": "Global",
+        "description": "System-wide content and announcements",
+        "agent_type": "general",
+        "icon": "globe-network",
+        "color": "#2B6CB0",
+        "sort_order": 0,
+        "visible": True  # Visible to all users with global permissions
+    },
     {
         "slug": "macro",
         "title": "Macroeconomic Research",

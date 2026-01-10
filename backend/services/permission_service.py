@@ -141,16 +141,19 @@ class PermissionService:
         required_role: str = "reader",
     ) -> List[str]:
         """
-        Get list of topics user can access at the required role level.
+        Get list of topics user can access at the EXACT specified role level.
+
+        This uses explicit role matching - a user must have the exact role
+        (e.g., {topic}:reader or global:reader) to access a topic at that level.
+        Higher roles do NOT automatically grant lower role access.
 
         Args:
             user_scopes: List of user's permission scopes
-            required_role: Minimum role required
+            required_role: Exact role required (reader, analyst, editor, admin)
 
         Returns:
-            List of accessible topic slugs
+            List of accessible topic slugs, or ["*"] for global access
         """
-        required_level = ROLE_LEVELS.get(required_role, 0)
         accessible_topics = set()
 
         for scope in user_scopes:
@@ -158,11 +161,11 @@ class PermissionService:
                 continue
 
             scope_group, scope_role = scope.split(":", 1)
-            scope_level = ROLE_LEVELS.get(scope_role, 0)
 
-            if scope_level >= required_level:
+            # Exact role match required (no hierarchy)
+            if scope_role == required_role:
                 if scope_group == "global":
-                    # Global access - return special marker or all topics
+                    # Global access at this role level
                     return ["*"]  # Indicates all topics
                 else:
                     accessible_topics.add(scope_group)

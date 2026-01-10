@@ -41,7 +41,9 @@ export const handle: Handle = async ({ event, resolve }) => {
         "font-src 'self'",
         // Connect: self + LinkedIn APIs for OAuth + Backend API (dynamic based on env)
         `connect-src 'self' https://www.linkedin.com https://api.linkedin.com ${apiUrl} ${wsUrl}`,
-        // Frames: none (we don't embed iframes)
+        // Frame sources: allow embedding content from self and the API
+        `frame-src 'self' ${apiUrl} https:`,
+        // Frame ancestors: prevent this page from being embedded elsewhere
         "frame-ancestors 'none'",
         // Form actions: self only
         "form-action 'self'",

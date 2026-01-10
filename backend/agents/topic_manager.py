@@ -1,19 +1,28 @@
 """
 Topic Manager for dynamic topic handling.
 
-This module manages topics dynamically from the database instead of
-hardcoding them. It provides caching for performance and helpers for
-topic inference from user messages.
+This module manages topics dynamically from the database.
+It matches user messages against topic slugs and titles.
 """
 
 from typing import Dict, List, Optional, Any
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+# Reserved keywords that should NOT be used as topic slugs
+# These are navigation targets and would conflict with topic routing
+# Note: "global" is NOT reserved - it's a special topic for system-wide content
+RESERVED_KEYWORDS = {
+    "home", "search", "analyst", "editor", "admin", "profile",
+    "content", "settings", "account", "login", "logout",
+    "auth", "callback", "api"
+}
 
 
 @dataclass
@@ -22,326 +31,285 @@ class TopicConfig:
     slug: str                        # URL-safe identifier (e.g., "macro")
     name: str                        # Display name (e.g., "Macro Economics")
     description: str                 # Full description
-    keywords: List[str]              # Keywords for inference
-    icon: Optional[str] = None       # Optional icon identifier
     active: bool = True              # Whether topic is active
+    visible: bool = True             # Whether topic is visible in reader section
+    access_mainchat: bool = True     # Whether AI agents can access this topic
     order: int = 0                   # Display order
-    metadata: Dict[str, Any] = field(default_factory=dict)  # Extra metadata
 
 
-# Default topic configurations - used when database topics not available
-DEFAULT_TOPICS: Dict[str, TopicConfig] = {
-    "macro": TopicConfig(
-        slug="macro",
-        name="Macro Economics",
-        description="Macroeconomic analysis covering GDP, inflation, interest rates, monetary policy, and economic indicators",
-        keywords=[
-            "economy", "economic", "gdp", "inflation", "fed", "federal reserve",
-            "interest rate", "unemployment", "jobs", "growth", "recession",
-            "monetary policy", "fiscal", "treasury", "ecb", "central bank",
-            "employment", "cpi", "ppi", "retail sales", "housing"
-        ],
-        order=1
-    ),
-    "equity": TopicConfig(
-        slug="equity",
-        name="Equity Markets",
-        description="Equity market analysis covering stocks, valuations, earnings, and market trends",
-        keywords=[
-            "stock", "equity", "equities", "shares", "company", "earnings",
-            "revenue", "profit", "valuation", "p/e", "market cap", "dividend",
-            "nasdaq", "s&p", "dow", "ipo", "buyback", "eps", "growth stock",
-            "value stock", "sector"
-        ],
-        order=2
-    ),
-    "fixed_income": TopicConfig(
-        slug="fixed_income",
-        name="Fixed Income",
-        description="Fixed income analysis covering bonds, yields, credit markets, and debt instruments",
-        keywords=[
-            "bond", "bonds", "yield", "credit", "treasury", "debt", "coupon",
-            "maturity", "duration", "spread", "default", "investment grade",
-            "high yield", "fixed income", "sovereign", "corporate bond",
-            "municipal", "junk bond", "credit rating"
-        ],
-        order=3
-    ),
-    "esg": TopicConfig(
-        slug="esg",
-        name="ESG",
-        description="ESG analysis covering environmental, social, and governance factors in investing",
-        keywords=[
-            "esg", "sustainability", "climate", "environmental", "social",
-            "governance", "carbon", "renewable", "green", "impact",
-            "responsible", "ethical", "net zero", "emissions", "diversity",
-            "stakeholder", "sustainable"
-        ],
-        order=4
-    )
-}
+# Module-level cache for topics (shared across all instances)
+_topics_cache: Dict[str, TopicConfig] = {}
+_cache_time: Optional[datetime] = None
+CACHE_TIMEOUT = 60  # 1 minute cache
 
 
-class TopicManager:
-    """
-    Manages topics dynamically from the database.
+def _get_db_session() -> Session:
+    """Get a new database session."""
+    from database import SessionLocal
+    return SessionLocal()
 
-    Features:
-    - Loads topics from database with caching
-    - Falls back to defaults if database unavailable
-    - Provides topic inference from user messages
-    - Caches for performance (refreshes periodically)
-    """
 
-    # Cache timeout in seconds
-    CACHE_TIMEOUT = 300  # 5 minutes
+def _load_topics_from_db() -> Dict[str, TopicConfig]:
+    """Load all active topics from database."""
+    global _topics_cache, _cache_time
 
-    def __init__(self, db: Optional[Session] = None):
-        """
-        Initialize the topic manager.
+    # Check cache
+    if _cache_time and _topics_cache:
+        age = (datetime.utcnow() - _cache_time).total_seconds()
+        if age < CACHE_TIMEOUT:
+            return _topics_cache
 
-        Args:
-            db: Optional database session. If not provided, uses defaults.
-        """
-        self.db = db
-        self._cache: Dict[str, TopicConfig] = {}
-        self._cache_time: Optional[datetime] = None
-
-    def get_available_topics(self, force_refresh: bool = False) -> List[str]:
-        """
-        Get list of available topic slugs.
-
-        Args:
-            force_refresh: Force reload from database
-
-        Returns:
-            List of topic slugs
-        """
-        topics = self._get_topics(force_refresh)
-        return [t.slug for t in topics.values() if t.active]
-
-    def get_topic_config(self, topic_slug: str) -> Optional[TopicConfig]:
-        """
-        Get configuration for a specific topic.
-
-        Args:
-            topic_slug: The topic slug to look up
-
-        Returns:
-            TopicConfig if found, None otherwise
-        """
-        topics = self._get_topics()
-        return topics.get(topic_slug)
-
-    def get_all_topics(self, include_inactive: bool = False) -> List[TopicConfig]:
-        """
-        Get all topic configurations.
-
-        Args:
-            include_inactive: Whether to include inactive topics
-
-        Returns:
-            List of TopicConfig objects
-        """
-        topics = self._get_topics()
-        result = list(topics.values())
-
-        if not include_inactive:
-            result = [t for t in result if t.active]
-
-        # Sort by order
-        result.sort(key=lambda t: t.order)
-
-        return result
-
-    def infer_topic_from_message(self, message: str) -> Optional[str]:
-        """
-        Infer topic from a user message using keyword matching.
-
-        Args:
-            message: The user's message
-
-        Returns:
-            Topic slug if matched, None otherwise
-        """
-        message_lower = message.lower()
-        topics = self._get_topics()
-
-        # Score each topic based on keyword matches
-        scores: Dict[str, int] = {}
-
-        for slug, config in topics.items():
-            if not config.active:
-                continue
-
-            score = 0
-            for keyword in config.keywords:
-                if keyword.lower() in message_lower:
-                    # Longer keywords get higher weight
-                    score += len(keyword.split())
-
-            if score > 0:
-                scores[slug] = score
-
-        # Return highest scoring topic
-        if scores:
-            best_topic = max(scores, key=scores.get)
-            logger.debug(f"Inferred topic '{best_topic}' from message (score: {scores[best_topic]})")
-            return best_topic
-
-        return None
-
-    def get_topic_keywords(self, topic_slug: str) -> List[str]:
-        """
-        Get keywords for a specific topic.
-
-        Args:
-            topic_slug: The topic slug
-
-        Returns:
-            List of keywords for the topic
-        """
-        config = self.get_topic_config(topic_slug)
-        return config.keywords if config else []
-
-    def is_valid_topic(self, topic_slug: str) -> bool:
-        """
-        Check if a topic slug is valid and active.
-
-        Args:
-            topic_slug: The topic slug to check
-
-        Returns:
-            True if valid and active, False otherwise
-        """
-        config = self.get_topic_config(topic_slug)
-        return config is not None and config.active
-
-    def _get_topics(self, force_refresh: bool = False) -> Dict[str, TopicConfig]:
-        """Get topics from cache or load from database."""
-        # Check cache validity
-        if not force_refresh and self._is_cache_valid():
-            return self._cache
-
-        # Try to load from database
-        if self.db:
-            try:
-                db_topics = self._load_from_database()
-                if db_topics:
-                    self._cache = db_topics
-                    self._cache_time = datetime.utcnow()
-                    logger.debug(f"Loaded {len(db_topics)} topics from database")
-                    return self._cache
-            except Exception as e:
-                logger.warning(f"Failed to load topics from database: {e}")
-
-        # Fall back to defaults
-        if not self._cache:
-            logger.debug("Using default topics")
-            self._cache = DEFAULT_TOPICS.copy()
-            self._cache_time = datetime.utcnow()
-
-        return self._cache
-
-    def _is_cache_valid(self) -> bool:
-        """Check if cache is still valid."""
-        if not self._cache or not self._cache_time:
-            return False
-
-        age = datetime.utcnow() - self._cache_time
-        return age.total_seconds() < self.CACHE_TIMEOUT
-
-    def _load_from_database(self) -> Optional[Dict[str, TopicConfig]]:
-        """
-        Load topics from database.
-
-        Expected database model:
-        - Topic table with: slug, name, description, keywords (JSON), active, order
-        """
-        if not self.db:
-            return None
-
+    try:
+        from models import Topic
+        db = _get_db_session()
         try:
-            # Import here to avoid circular imports
-            from models import Topic
-
-            db_topics = self.db.query(Topic).filter(Topic.active == True).all()
+            db_topics = db.query(Topic).filter(Topic.active == True).all()
 
             result = {}
             for topic in db_topics:
-                # Parse keywords - could be JSON array or comma-separated
-                keywords = topic.keywords if isinstance(topic.keywords, list) else []
-                if isinstance(topic.keywords, str):
-                    keywords = [k.strip() for k in topic.keywords.split(",")]
-
                 result[topic.slug] = TopicConfig(
                     slug=topic.slug,
-                    name=topic.name,
+                    name=topic.title,  # Use 'title' field from DB
                     description=topic.description or "",
-                    keywords=keywords,
-                    icon=getattr(topic, "icon", None),
                     active=topic.active,
-                    order=getattr(topic, "order", 0),
-                    metadata=getattr(topic, "metadata", {}) or {}
+                    visible=getattr(topic, "visible", True),
+                    access_mainchat=getattr(topic, "access_mainchat", True),
+                    order=getattr(topic, "sort_order", 0) or 0
                 )
 
-            return result if result else None
+            if result:
+                _topics_cache = result
+                _cache_time = datetime.utcnow()
+                logger.debug(f"Loaded {len(result)} topics from database: {list(result.keys())}")
+                return result
+        finally:
+            db.close()
 
-        except Exception as e:
-            logger.warning(f"Database topic load failed: {e}")
-            return None
+    except Exception as e:
+        logger.warning(f"Failed to load topics from database: {e}")
 
-    def refresh(self):
-        """Force refresh of topic cache."""
-        self._cache = {}
-        self._cache_time = None
-        self._get_topics(force_refresh=True)
+    # Return cached if available, even if expired
+    if _topics_cache:
+        return _topics_cache
 
-
-# Global instance for convenience
-_global_manager: Optional[TopicManager] = None
+    # No cache and no DB - return empty
+    logger.warning("No topics available - database not accessible")
+    return {}
 
 
-def get_topic_manager(db: Optional[Session] = None) -> TopicManager:
+def get_available_topics() -> List[str]:
     """
-    Get the global topic manager instance.
-
-    Args:
-        db: Optional database session
-
-    Returns:
-        TopicManager instance
-    """
-    global _global_manager
-
-    if _global_manager is None or db is not None:
-        _global_manager = TopicManager(db)
-
-    return _global_manager
-
-
-def get_available_topics(db: Optional[Session] = None) -> List[str]:
-    """
-    Convenience function to get available topics.
-
-    Args:
-        db: Optional database session
+    Get list of available topic slugs from database.
 
     Returns:
         List of topic slugs
     """
-    return get_topic_manager(db).get_available_topics()
+    topics = _load_topics_from_db()
+    return [t.slug for t in topics.values() if t.active]
 
 
-def infer_topic(message: str, db: Optional[Session] = None) -> Optional[str]:
+def get_topic_config(topic_slug: str) -> Optional[TopicConfig]:
     """
-    Convenience function to infer topic from message.
+    Get configuration for a specific topic.
+
+    Args:
+        topic_slug: The topic slug to look up
+
+    Returns:
+        TopicConfig if found, None otherwise
+    """
+    topics = _load_topics_from_db()
+    return topics.get(topic_slug)
+
+
+def get_all_topics() -> List[TopicConfig]:
+    """
+    Get all active topic configurations.
+
+    Returns:
+        List of TopicConfig objects sorted by order
+    """
+    topics = _load_topics_from_db()
+    result = [t for t in topics.values() if t.active]
+    result.sort(key=lambda t: t.order)
+    return result
+
+
+def get_visible_topics() -> List[TopicConfig]:
+    """
+    Get all visible topics for the reader section.
+
+    Only returns topics where both active=True and visible=True.
+
+    Returns:
+        List of TopicConfig objects sorted by order
+    """
+    topics = _load_topics_from_db()
+    result = [t for t in topics.values() if t.active and t.visible]
+    result.sort(key=lambda t: t.order)
+    return result
+
+
+def get_ai_accessible_topics() -> List[TopicConfig]:
+    """
+    Get topics accessible by AI agents (chat and article query).
+
+    Only returns topics where both active=True and access_mainchat=True.
+    Used by chat agents and article query agents to filter which topics
+    they should consider when processing user requests.
+
+    Returns:
+        List of TopicConfig objects sorted by order
+    """
+    topics = _load_topics_from_db()
+    result = [t for t in topics.values() if t.active and t.access_mainchat]
+    result.sort(key=lambda t: t.order)
+    return result
+
+
+def get_ai_accessible_topic_slugs() -> List[str]:
+    """
+    Get list of topic slugs accessible by AI agents.
+
+    Returns:
+        List of topic slugs where access_mainchat=True
+    """
+    return [t.slug for t in get_ai_accessible_topics()]
+
+
+def infer_topic(message: str, db: Optional[Session] = None, ai_only: bool = True) -> Optional[str]:
+    """
+    Infer topic from a user message by matching against slugs and titles.
+
+    Matching priority:
+    1. Exact slug match (e.g., "macro" matches topic with slug "macro")
+    2. Slug with underscores/hyphens (e.g., "fixed income" matches "fixed_income")
+    3. Title word match (e.g., "economics" matches "Macro Economics")
 
     Args:
         message: User message
-        db: Optional database session
+        db: Optional database session (not used, loads its own)
+        ai_only: If True, only consider topics with access_mainchat=True (default True)
 
     Returns:
         Inferred topic slug or None
     """
-    return get_topic_manager(db).infer_topic_from_message(message)
+    message_lower = message.lower()
+    topics = _load_topics_from_db()
+
+    if not topics:
+        logger.warning("No topics loaded, cannot infer topic")
+        return None
+
+    # Build match candidates for each topic
+    # Score: higher = better match
+    scores: Dict[str, int] = {}
+
+    for slug, config in topics.items():
+        if not config.active:
+            continue
+
+        # Skip topics not accessible by AI when ai_only is True
+        if ai_only and not config.access_mainchat:
+            continue
+
+        score = 0
+        title_lower = config.name.lower()
+
+        # 1. Exact slug match (highest priority)
+        if slug in message_lower:
+            score += 100
+
+        # 2. Slug variations (with spaces instead of underscores)
+        slug_spaced = slug.replace("_", " ").replace("-", " ")
+        if slug_spaced in message_lower:
+            score += 90
+
+        # 3. Full title match (e.g., "ESG Research", "Fixed Income Research")
+        if title_lower in message_lower:
+            score += 95
+
+        # 4. Title without common suffixes (e.g., "ESG" from "ESG Research")
+        title_cleaned = title_lower
+        for suffix in [" research", " analysis", " documentation"]:
+            if title_cleaned.endswith(suffix):
+                title_cleaned = title_cleaned[:-len(suffix)]
+                break
+        if title_cleaned and title_cleaned in message_lower:
+            score += 85
+
+        # 5. Title words match
+        title_words = title_lower.split()
+        for word in title_words:
+            # Skip common words
+            if word in ["research", "analysis", "the", "and", "of", "for", "documentation"]:
+                continue
+            if len(word) >= 3 and word in message_lower:
+                score += 10
+
+        if score > 0:
+            scores[slug] = score
+
+    # Return highest scoring topic (excluding reserved keywords)
+    if scores:
+        # Filter out reserved keywords from candidates
+        valid_scores = {k: v for k, v in scores.items() if k.lower() not in RESERVED_KEYWORDS}
+        if valid_scores:
+            best_topic = max(valid_scores, key=valid_scores.get)
+            logger.debug(f"Inferred topic '{best_topic}' from message (score: {valid_scores[best_topic]})")
+            return best_topic
+
+    return None
+
+
+def is_valid_topic(topic_slug: str) -> bool:
+    """
+    Check if a topic slug is valid and active.
+
+    Args:
+        topic_slug: The topic slug to check
+
+    Returns:
+        True if valid and active and not a reserved keyword, False otherwise
+    """
+    # Reserved keywords cannot be valid topic slugs
+    if topic_slug.lower() in RESERVED_KEYWORDS:
+        return False
+    config = get_topic_config(topic_slug)
+    return config is not None and config.active
+
+
+def refresh_cache():
+    """Force refresh of topic cache."""
+    global _topics_cache, _cache_time
+    _topics_cache = {}
+    _cache_time = None
+    _load_topics_from_db()
+
+
+# Legacy compatibility - these are no longer needed but kept for imports
+class TopicManager:
+    """Legacy class - use module-level functions instead."""
+
+    def __init__(self, db: Optional[Session] = None):
+        pass
+
+    def get_available_topics(self) -> List[str]:
+        return get_available_topics()
+
+    def get_topic_config(self, topic_slug: str) -> Optional[TopicConfig]:
+        return get_topic_config(topic_slug)
+
+    def get_all_topics(self) -> List[TopicConfig]:
+        return get_all_topics()
+
+    def infer_topic_from_message(self, message: str) -> Optional[str]:
+        return infer_topic(message)
+
+    def is_valid_topic(self, topic_slug: str) -> bool:
+        return is_valid_topic(topic_slug)
+
+
+def get_topic_manager(db: Optional[Session] = None) -> TopicManager:
+    """Legacy function - returns a TopicManager instance."""
+    return TopicManager(db)

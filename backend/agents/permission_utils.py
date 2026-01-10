@@ -99,9 +99,16 @@ def get_topics_for_role(user_context: Dict[str, Any], min_role: str) -> List[str
     scopes = user_context.get("scopes", [])
     min_level = ROLE_HIERARCHY.get(min_role, 1)
 
-    # Global admin has access to all topics
+    # Global admin has access to all topics - load dynamically from database
     if "global:admin" in scopes:
-        return ["macro", "equity", "fixed_income", "esg"]  # TODO: Load dynamically
+        from database import SessionLocal
+        from models import Topic
+        db = SessionLocal()
+        try:
+            all_topics = db.query(Topic).filter(Topic.active == True).all()
+            return [t.slug for t in all_topics]
+        finally:
+            db.close()
 
     topics = set()
 
@@ -241,3 +248,116 @@ def build_permission_context_for_prompt(user_context: Dict[str, Any]) -> str:
         lines.append("  - Reader access only (no topic-specific permissions)")
 
     return "\n".join(lines)
+
+
+def get_accessible_article_statuses(user_role: str) -> List[str]:
+    """
+    Get article statuses accessible to a user role.
+
+    Access rules:
+    - reader: Only published articles
+    - analyst: Draft or editor articles (their workflow states)
+    - editor: Only articles with status "editor" (awaiting review)
+    - admin: All article statuses
+
+    Args:
+        user_role: The user's role (reader, analyst, editor, admin)
+
+    Returns:
+        List of article status strings the user can access
+    """
+    role = user_role.lower() if user_role else "reader"
+
+    if role == "admin":
+        return ["draft", "editor", "pending_approval", "published", "deactivated"]
+    elif role == "analyst":
+        return ["draft", "editor"]
+    elif role == "editor":
+        return ["editor", "pending_approval"]
+    else:  # reader or default
+        return ["published"]
+
+
+def validate_article_access(
+    article_id: int,
+    user_context: Dict[str, Any],
+    db,
+    topic: Optional[str] = None
+) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Validate user can access an article based on role and article status.
+
+    This function:
+    1. Checks if the article exists
+    2. Verifies the user has topic permission
+    3. Validates article status matches the user's role-based access
+
+    Args:
+        article_id: The article ID to validate
+        user_context: User context with scopes and topic_roles
+        db: Database session
+        topic: Optional topic to restrict to (if None, uses article's topic)
+
+    Returns:
+        Tuple of:
+        - allowed (bool): Whether user can access the article
+        - error_message (str|None): Error message if denied
+        - article_info (dict|None): Article info for context update if allowed
+    """
+    from models import ContentArticle
+
+    # Query the article
+    article = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+
+    if not article:
+        return False, f"Article #{article_id} not found.", None
+
+    article_topic = article.topic
+    # Handle enum properly - get .value if it's an enum
+    raw_status = article.status
+    if hasattr(raw_status, 'value'):
+        article_status = raw_status.value.lower()
+    elif raw_status:
+        article_status = str(raw_status).lower()
+    else:
+        article_status = "draft"
+    logger.debug(f"validate_article_access: article_id={article_id}, raw_status={raw_status}, article_status={article_status}")
+
+    # If topic restriction provided, validate it matches
+    if topic and article_topic != topic:
+        return False, f"Article #{article_id} belongs to topic '{article_topic}', not '{topic}'.", None
+
+    # Get user's role for this article's topic
+    user_role = get_user_role_for_topic(user_context, article_topic)
+
+    # Check topic permission (at least reader)
+    allowed, error = check_topic_permission(article_topic, "reader", user_context)
+    if not allowed:
+        return False, error, None
+
+    # Get accessible statuses for this role
+    accessible_statuses = get_accessible_article_statuses(user_role)
+
+    # Check if article status is accessible
+    if article_status not in accessible_statuses:
+        role_name = user_role.capitalize()
+        status_list = ", ".join(accessible_statuses)
+        return False, (
+            f"As a **{role_name}** for '{article_topic}', you can only access articles with status: {status_list}. "
+            f"Article #{article_id} has status '{article_status}'."
+        ), None
+
+    # Build article info for context update
+    article_info = {
+        "id": article.id,
+        "topic": article_topic,
+        "status": article_status,
+        "headline": article.headline,
+        "keywords": article.keywords,
+        "author": article.author,
+        "created_at": article.created_at.isoformat() if article.created_at else None,
+        "updated_at": article.updated_at.isoformat() if article.updated_at else None
+    }
+
+    logger.debug(f"Article #{article_id} access validated for user with role '{user_role}'")
+    return True, None, article_info

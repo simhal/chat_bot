@@ -116,10 +116,11 @@
     }
 
     // Update navigation context when view changes
+    // Topic is set to 'global' so the chat knows we're in the global admin context
     $: if ($auth.isAuthenticated && isGlobalAdmin) {
         navigationContext.setContext({
             section: 'global_admin',
-            topic: null,
+            topic: 'global',
             subNav: currentView,
             articleId: null,
             articleHeadline: null,
@@ -1096,6 +1097,7 @@
                                 <th class="col-articles">Articles</th>
                                 <th class="col-readers">Readers</th>
                                 <th class="col-rating">Rating</th>
+                                <th class="col-visible">Visible</th>
                                 <th class="col-ai">AI</th>
                                 <th class="col-status">Status</th>
                                 <th class="col-actions">Actions</th>
@@ -1130,6 +1132,13 @@
                                     <td class="col-articles">{topic.article_count}</td>
                                     <td class="col-readers">{topic.reader_count || 0}</td>
                                     <td class="col-rating">{topic.rating_average ? topic.rating_average.toFixed(1) : '-'}</td>
+                                    <td class="col-visible">
+                                        {#if topic.visible}
+                                            <span class="visible-badge enabled" title="Visible in reader navigation">Yes</span>
+                                        {:else}
+                                            <span class="visible-badge disabled" title="Hidden from reader navigation">No</span>
+                                        {/if}
+                                    </td>
                                     <td class="col-ai">
                                         {#if topic.access_mainchat}
                                             <span class="ai-badge enabled" title="Main chat can query this topic">On</span>
@@ -2053,7 +2062,7 @@
         width: 60px;
     }
 
-    .col-articles, .col-readers, .col-rating, .col-ai {
+    .col-articles, .col-readers, .col-rating, .col-visible, .col-ai {
         width: 80px;
         text-align: center;
     }
@@ -2095,19 +2104,19 @@
         color: #6b7280;
     }
 
-    .ai-badge {
+    .ai-badge, .visible-badge {
         padding: 0.25rem 0.5rem;
         border-radius: 4px;
         font-size: 0.75rem;
         font-weight: 500;
     }
 
-    .ai-badge.enabled {
+    .ai-badge.enabled, .visible-badge.enabled {
         background: #dcfce7;
         color: #166534;
     }
 
-    .ai-badge.disabled {
+    .ai-badge.disabled, .visible-badge.disabled {
         background: #f3f4f6;
         color: #6b7280;
     }

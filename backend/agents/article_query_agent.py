@@ -51,6 +51,7 @@ class ArticleQueryAgent:
         topic: Optional[str] = None,
         limit: int = 10,
         include_drafts: bool = False,
+        ai_accessible_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Search for articles matching the query.
@@ -61,6 +62,7 @@ class ArticleQueryAgent:
             topic: Topic slug to search within (uses self.topic if not provided)
             limit: Maximum number of results
             include_drafts: Whether to include draft articles (requires analyst+)
+            ai_accessible_only: If True, only search topics with access_mainchat=True
 
         Returns:
             Dict with articles list and metadata
@@ -70,17 +72,40 @@ class ArticleQueryAgent:
         search_topic = topic or self.topic
         user_scopes = user_context.get("scopes", [])
 
+        # Filter by AI-accessible topics if requested
+        allowed_topics = None
+        if ai_accessible_only and not search_topic:
+            from agents.topic_manager import get_ai_accessible_topic_slugs
+            allowed_topics = get_ai_accessible_topic_slugs()
+            if not allowed_topics:
+                return {
+                    "success": True,
+                    "articles": [],
+                    "total_count": 0,
+                    "query": query,
+                    "topic": None,
+                }
+
         # Check if user can see drafts
         can_see_drafts = include_drafts and PermissionService.check_permission(
             user_scopes, "analyst", topic=search_topic
         )
 
         try:
+            # Determine which statuses to include
+            if can_see_drafts:
+                # Analysts can see draft, editor, and published
+                statuses = ["draft", "editor", "published"]
+            else:
+                # Regular users only see published articles
+                statuses = ["published"]
+
             articles = ContentService.search_articles(
                 db=self.db,
                 topic=search_topic,
                 query=query,
                 limit=limit,
+                statuses=statuses,
             )
 
             return {
@@ -197,6 +222,14 @@ class ArticleQueryAgent:
         from models import ArticleStatus
 
         create_topic = topic or self.topic
+
+        # Validate topic is provided
+        if not create_topic:
+            return {
+                "success": False,
+                "error": "Topic is required to create an article. Please specify a topic.",
+            }
+
         user_scopes = user_context.get("scopes", [])
 
         # Check permission

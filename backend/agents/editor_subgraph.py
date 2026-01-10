@@ -77,6 +77,7 @@ class EditorState(TypedDict, total=False):
     rejection_notes: Optional[str]
     editor_notes: Optional[str]
     user_context: Dict[str, Any]
+    conversation_history: List[Dict[str, str]]  # Previous messages for context
 
     # Permission check
     permission_granted: bool
@@ -108,7 +109,8 @@ def create_editor_state(
     topic: Optional[str] = None,
     rejection_notes: Optional[str] = None,
     editor_notes: Optional[str] = None,
-    hitl_decision: Optional[str] = None
+    hitl_decision: Optional[str] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> EditorState:
     """Create initial editor state."""
     return EditorState(
@@ -118,6 +120,7 @@ def create_editor_state(
         rejection_notes=rejection_notes,
         editor_notes=editor_notes,
         user_context=user_context,
+        conversation_history=conversation_history or [],
         permission_granted=False,
         permission_error=None,
         article_data=None,

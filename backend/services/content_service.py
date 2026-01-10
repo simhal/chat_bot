@@ -207,7 +207,9 @@ class ContentService:
         author: Optional[str] = None,
         created_after: Optional[str] = None,
         created_before: Optional[str] = None,
-        limit: int = 10
+        limit: int = 10,
+        status: Optional[str] = None,
+        statuses: Optional[List[str]] = None
     ) -> List[Dict]:
         """
         Search articles using hybrid search (keyword + semantic) with multiple criteria.
@@ -223,17 +225,20 @@ class ContentService:
             created_after: Filter articles created after this date (ISO format)
             created_before: Filter articles created before this date (ISO format)
             limit: Maximum number of results (default 10)
+            status: Filter by single status (e.g., 'published')
+            statuses: Filter by multiple statuses (e.g., ['published', 'editor'])
 
         Returns:
             List of matching article dicts
         """
         # Build cache key from all parameters
         cache_key_parts = [topic or "all", query or "", headline or "", keywords or "", author or "",
-                          created_after or "", created_before or "", str(limit)]
+                          created_after or "", created_before or "", str(limit),
+                          status or "", ",".join(statuses) if statuses else ""]
         cache_key = ":".join(cache_key_parts)
 
         # Try cache first (simplified - can enhance with proper cache key)
-        if topic and query and not any([headline, keywords, author, created_after, created_before]):
+        if topic and query and not any([headline, keywords, author, created_after, created_before, status, statuses]):
             cached = ContentCache.search_cached_content(topic, query)
             if cached:
                 return cached
@@ -242,6 +247,12 @@ class ContentService:
         filters = [
             ContentArticle.is_active == True
         ]
+
+        # Add status filter
+        if status:
+            filters.append(ContentArticle.status == status)
+        elif statuses:
+            filters.append(ContentArticle.status.in_(statuses))
 
         # Add topic filter only if topic is specified
         if topic:
@@ -300,14 +311,22 @@ class ContentService:
                 article_map = {a['id']: a for a in keyword_dicts}
 
                 # Add semantic results not in keyword results
+                # Apply same status filter as keyword search
                 semantic_only = VectorService.semantic_search(query, topic, limit)
                 for sem_result in semantic_only:
                     aid = sem_result['article_id']
                     if aid not in article_map:
-                        article = db.query(ContentArticle).filter(
+                        # Build filter with same status constraints
+                        semantic_filters = [
                             ContentArticle.id == aid,
                             ContentArticle.is_active == True
-                        ).first()
+                        ]
+                        if status:
+                            semantic_filters.append(ContentArticle.status == status)
+                        elif statuses:
+                            semantic_filters.append(ContentArticle.status.in_(statuses))
+
+                        article = db.query(ContentArticle).filter(*semantic_filters).first()
                         if article:
                             article_map[aid] = ContentService._article_to_dict(article)
 
@@ -358,12 +377,29 @@ class ContentService:
 
         Returns:
             Created article dict
+
+        Raises:
+            ValueError: If topic is invalid or inactive
         """
-        from models import ArticleStatus
+        from models import ArticleStatus, Topic
+
+        # Validate topic is provided
+        if not topic or topic == "None":
+            raise ValueError("Topic is required for article creation. Cannot create article without a topic.")
+
+        # Validate topic exists and is active
+        valid_topic = db.query(Topic).filter(
+            Topic.slug == topic,
+            Topic.active == True
+        ).first()
+
+        if not valid_topic:
+            raise ValueError(f"Invalid or inactive topic: '{topic}'. Article creation rejected.")
 
         # Create article metadata in PostgreSQL (no content field)
         article = ContentArticle(
-            topic=topic,
+            topic_id=valid_topic.id,  # Set the proper foreign key
+            topic=topic,  # Legacy field for backwards compatibility
             headline=headline,
             keywords=keywords,
             created_by_agent=agent_name,
@@ -474,7 +510,13 @@ class ContentService:
         return ContentService._article_to_dict(article)
 
     @staticmethod
-    def get_top_rated_articles(db: Session, topic: str, limit: int = 10) -> List[Dict]:
+    def get_top_rated_articles(
+        db: Session,
+        topic: str,
+        limit: int = 10,
+        status: Optional[str] = None,
+        statuses: Optional[List[str]] = None
+    ) -> List[Dict]:
         """
         Get top-rated articles for a topic.
 
@@ -482,14 +524,25 @@ class ContentService:
             db: Database session
             topic: Topic name
             limit: Maximum number of articles
+            status: Filter by single status (e.g., 'published')
+            statuses: Filter by multiple statuses (e.g., ['published', 'editor'])
 
         Returns:
             List of top-rated article dicts
         """
-        articles = db.query(ContentArticle).filter(
+        filters = [
             ContentArticle.topic == topic,
             ContentArticle.is_active == True,
             ContentArticle.rating.isnot(None)
+        ]
+
+        if status:
+            filters.append(ContentArticle.status == status)
+        elif statuses:
+            filters.append(ContentArticle.status.in_(statuses))
+
+        articles = db.query(ContentArticle).filter(
+            *filters
         ).order_by(
             desc(ContentArticle.rating),
             desc(ContentArticle.rating_count)
@@ -498,7 +551,13 @@ class ContentService:
         return [ContentService._article_to_dict(a) for a in articles]
 
     @staticmethod
-    def get_most_read_articles(db: Session, topic: str, limit: int = 10) -> List[Dict]:
+    def get_most_read_articles(
+        db: Session,
+        topic: str,
+        limit: int = 10,
+        status: Optional[str] = None,
+        statuses: Optional[List[str]] = None
+    ) -> List[Dict]:
         """
         Get most-read articles for a topic.
 
@@ -506,13 +565,24 @@ class ContentService:
             db: Database session
             topic: Topic name
             limit: Maximum number of articles
+            status: Filter by single status (e.g., 'published')
+            statuses: Filter by multiple statuses (e.g., ['published', 'editor'])
 
         Returns:
             List of most-read article dicts
         """
-        articles = db.query(ContentArticle).filter(
+        filters = [
             ContentArticle.topic == topic,
             ContentArticle.is_active == True
+        ]
+
+        if status:
+            filters.append(ContentArticle.status == status)
+        elif statuses:
+            filters.append(ContentArticle.status.in_(statuses))
+
+        articles = db.query(ContentArticle).filter(
+            *filters
         ).order_by(
             desc(ContentArticle.readership_count)
         ).limit(limit).all()

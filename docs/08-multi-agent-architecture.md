@@ -9,7 +9,7 @@ The platform uses a **multi-agent AI system** built on LangGraph for intelligent
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
-2. [Agent Hierarchy](#2-agent-hierarchy)
+2. [Graph Architecture](#2-graph-architecture)
 3. [State Management](#3-state-management)
 4. [Permission Model](#4-permission-model)
 5. [Human-in-the-Loop Workflow](#5-human-in-the-loop-workflow)
@@ -23,20 +23,22 @@ The platform uses a **multi-agent AI system** built on LangGraph for intelligent
 
 | Goal | Description |
 |------|-------------|
-| **Security** | Tools filtered at runtime based on user's JWT scopes |
-| **Flexibility** | Dynamic agent composition based on user role |
-| **Traceability** | Full audit trail via workflow context |
-| **Extensibility** | Easy addition of new agents and tools |
+| **Simplicity** | Single entry point (`invoke_chat`), singleton graph pattern |
+| **Performance** | Graph compiled once at startup, reused for all requests |
+| **Security** | Intent-based routing with permission checks per node |
+| **Traceability** | Full audit trail via LangSmith integration |
+| **Extensibility** | Easy addition of new handler nodes |
 | **Human Oversight** | Critical actions (publishing) require human approval |
 
 ### 1.2 Key Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Tool Access Control | Runtime filtering | All tools registered, filtered per-request based on scopes |
-| Resource Creation | Auto-create and attach | Research agents automatically create DRAFT resources |
-| Editor Approval | HITL interrupt | LangGraph interrupt pattern allows human review |
-| State Management | Enhanced TypedDict | Maintains LangGraph compatibility |
+| Graph Instance | Singleton pattern | Graph built once at startup, reused for all requests |
+| Entry Point | Single `invoke_chat()` function | Clean API, no wrapper classes |
+| State Schema | Pydantic + TypedDict | Pydantic for API validation, TypedDict for LangGraph |
+| Routing | Intent classification | Router node classifies intent, routes to handler nodes |
+| Checkpointing | Redis (production) / Memory (dev) | HITL state persistence across restarts |
 
 ### 1.3 High-Level Architecture
 
@@ -53,8 +55,8 @@ The platform uses a **multi-agent AI system** built on LangGraph for intelligent
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           API LAYER                                      │
 │  ┌─────────────────────┐  ┌─────────────────────┐  ┌───────────────┐   │
-│  │  /api/chat          │  │  /api/tools/*       │  │  /ws/{user}   │   │
-│  │  (chat endpoint)    │  │  (REST endpoints)   │  │  (WebSocket)  │   │
+│  │  /api/chat          │  │  /api/approvals/*   │  │  /ws/{user}   │   │
+│  │  (chat endpoint)    │  │  (HITL workflows)   │  │  (WebSocket)  │   │
 │  └──────────┬──────────┘  └──────────┬──────────┘  └───────┬───────┘   │
 │             │                        │                      │           │
 │             └────────────┬───────────┴──────────────────────┘           │
@@ -65,28 +67,31 @@ The platform uses a **multi-agent AI system** built on LangGraph for intelligent
 │  └───────────────────────────────────────────────────────────────┘      │
 └─────────────────────────────────┬───────────────────────────────────────┘
                                   │
-                    ┌─────────────┴─────────────┐
-                    │                           │
-                    ▼                           ▼
-┌───────────────────────────────┐  ┌───────────────────────────────────┐
-│     SYNCHRONOUS AGENTS        │  │      CELERY BACKGROUND TASKS       │
-│        (FastAPI)              │  │          (Workers)                 │
-│                               │  │                                    │
-│  ┌─────────────────────────┐  │  │  ┌──────────────────────────────┐ │
-│  │ MainChatAgent           │  │  │  │ AnalystAgent Task            │ │
-│  │ ArticleQueryAgent       │  │  │  │ WebSearchAgent               │ │
-│  │ (reader operations)     │  │  │  │ DataDownloadAgent            │ │
-│  └─────────────────────────┘  │  │  │ EditorSubAgent Task          │ │
-│                               │  │  └──────────────────────────────┘ │
-└───────────────────────────────┘  └───────────────────────────────────┘
-                                              │
-                                              ▼
-                                   ┌────────────────────┐
-                                   │  Redis             │
-                                   │  - Message Broker  │
-                                   │  - Result Backend  │
-                                   │  - Checkpoints     │
-                                   └────────────────────┘
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        AGENT SERVICE LAYER                               │
+│                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  AgentService.chat()                                             │    │
+│  │  └── invoke_chat(message, user_context, navigation_context)      │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                  │                                       │
+│                                  ▼                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │  Singleton Chat Graph (built once at startup)                    │    │
+│  │                                                                   │    │
+│  │  START → router_node → [handler nodes] → response_builder → END  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                       ┌────────────────────┐
+                       │  Redis             │
+                       │  - Checkpoints     │
+                       │  - Session Cache   │
+                       │  - HITL State      │
+                       └────────────────────┘
 ```
 
 ### 1.4 Request Data Flow
@@ -94,86 +99,157 @@ The platform uses a **multi-agent AI system** built on LangGraph for intelligent
 1. **Client Request** - User sends a message via chat interface
 2. **JWT Validation** - Extract user scopes and permissions
 3. **Build UserContext** - Load user preferences, scopes, and tonality settings
-4. **Initialize AgentState** - Prepare conversation history and available tools
-5. **MainChatAgent.process()** - Build system prompt, filter tools, route to sub-agent
-6. **Response with metadata** - Return response, agent type, tools used, workflow state
+4. **Build NavigationContext** - Capture frontend context (section, topic, article)
+5. **invoke_chat()** - Single entry point to the graph
+6. **Router Node** - Classify intent and route to appropriate handler
+7. **Handler Node** - Process request (ui_action, content_gen, editor, general, entitlements)
+8. **Response Builder** - Assemble final ChatResponse with metadata
+9. **Return** - Response with agent_type, ui_action, articles, etc.
 
 ---
 
-## 2. Agent Hierarchy
+## 2. Graph Architecture
 
-### 2.1 Agent Composition
+### 2.1 Singleton Graph Pattern
 
-```
-MainChatAgent (Orchestrator)
-│
-├── Owns: ToolRegistry (filtered view)
-├── Owns: PromptComposer (dynamic tonality)
-├── Owns: UserContext (scopes, preferences)
-│
-├── Direct Sub-Agents (for readers):
-│   │
-│   └── ArticleQueryAgent [per topic]
-│       ├── Required Role: reader
-│       ├── Topic Scoped: Yes
-│       ├── Purpose: Search and read articles
-│       └── Tools: search_articles, get_article
-│
-├── AnalystAgent [per topic]
-│   ├── Required Role: analyst
-│   ├── Topic Scoped: Yes
-│   ├── Purpose: Research workflows, create articles with resources
-│   │
-│   ├── Composes Multiple Sub-Agents:
-│   │   ├── ArticleQueryAgent (create/write articles)
-│   │   ├── ResourceQueryAgent (find existing resources)
-│   │   ├── WebSearchAgent (web/news search)
-│   │   └── DataDownloadAgent (fetch structured data)
-│   │
-│   └── Resource Creation: create_text_resource, create_table_resource
-│
-└── EditorSubAgent [per topic]
-    ├── Required Role: editor
-    ├── Topic Scoped: Yes
-    ├── Purpose: Editorial review and publishing with HITL
-    └── Tools: review_article, request_changes, publish (HITL)
+The chat graph is built **once at startup** and reused for all requests:
+
+```python
+# agents/graph.py
+
+_GRAPH = None  # Singleton instance
+
+def get_graph():
+    """Get the singleton graph instance, building it if necessary."""
+    global _GRAPH
+    if _GRAPH is None:
+        _GRAPH = _build_graph()
+    return _GRAPH
+
+def invoke_chat(
+    message: str,
+    user_context: UserContext,
+    navigation_context: Optional[NavigationContext] = None,
+    thread_id: Optional[str] = None,
+) -> ChatResponse:
+    """Single entry point for all chat processing."""
+    graph = get_graph()
+    state = create_initial_state(user_context, messages, navigation_context)
+    result = graph.invoke(state, config)
+    return ChatResponse(...)
 ```
 
-### 2.2 Agent Responsibilities
+### 2.2 Graph Structure
 
-| Agent | Purpose | Key Capabilities |
-|-------|---------|------------------|
-| **MainChatAgent** | Primary orchestrator | Memory management, routing, user context |
-| **ArticleQueryAgent** | Article operations | Search, create drafts, write content |
-| **AnalystAgent** | Research workflows | Coordinates research agents, creates resources |
-| **WebSearchAgent** | External information | Web search, news search |
-| **DataDownloadAgent** | Structured data | Stock data, economic indicators, PDFs |
-| **EditorSubAgent** | Publishing workflow | Review, request changes, publish with HITL |
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        CHAT GRAPH STRUCTURE                              │
+│                                                                          │
+│    START                                                                 │
+│      │                                                                   │
+│      ▼                                                                   │
+│  ┌────────────┐                                                          │
+│  │   router   │  (Classifies user intent)                                │
+│  └──────┬─────┘                                                          │
+│         │                                                                │
+│         │ route_by_intent() - Conditional edges                          │
+│         │                                                                │
+│  ┌──────┴──────┬──────────────┬──────────────┬──────────────┐           │
+│  │             │              │              │              │            │
+│  ▼             ▼              ▼              ▼              ▼            │
+│ ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐       │
+│ │ui_action│ │content_  │ │ editor_  │ │ general_ │ │entitlements│       │
+│ │         │ │generation│ │ workflow │ │   chat   │ │            │       │
+│ └────┬────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬──────┘       │
+│      │           │            │            │             │               │
+│      └───────────┴────────────┴────────────┴─────────────┘               │
+│                               │                                          │
+│                               ▼                                          │
+│                     ┌─────────────────┐                                  │
+│                     │response_builder │  (Assembles ChatResponse)        │
+│                     └────────┬────────┘                                  │
+│                              │                                           │
+│                              ▼                                           │
+│                             END                                          │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-### 2.3 Agent Execution Model
+### 2.3 Handler Nodes
 
-| Agent | Execution | Reason |
-|-------|-----------|--------|
-| **MainChatAgent** | Synchronous (FastAPI) | Quick response needed |
-| **ArticleQueryAgent** | Synchronous or Celery | Depends on context |
-| **AnalystAgent** | Celery Worker | Heavy research, minutes |
-| **WebSearchAgent** | Celery Worker | External API calls |
-| **DataDownloadAgent** | Celery Worker | External API calls |
-| **EditorSubAgent** | Celery Worker | HITL workflow, async |
+| Node | Intent Type | Purpose |
+|------|-------------|---------|
+| **router_node** | - | Classifies user intent using LLM |
+| **ui_action_node** | `ui_action` | Navigation, button clicks, tab switches |
+| **content_generation_node** | `content_generation` | Article writing (analyst workflow) |
+| **editor_workflow_node** | `editor_workflow` | Review, publish, reject (HITL) |
+| **general_chat_node** | `general_chat` | Q&A, topic queries, article search |
+| **entitlements_node** | `entitlements` | Permission questions ("what can I do?") |
+| **response_builder_node** | - | Assembles final response from state |
+
+### 2.4 Intent Classification
+
+The router node uses LLM to classify user intent:
+
+```python
+IntentType = Literal[
+    "navigation",        # → ui_action_node
+    "ui_action",         # → ui_action_node
+    "content_generation", # → content_generation_node
+    "editor_workflow",   # → editor_workflow_node
+    "general_chat",      # → general_chat_node
+    "entitlements"       # → entitlements_node
+]
+```
 
 ---
 
 ## 3. State Management
 
-### 3.1 State Components
+### 3.1 State Schema
 
-The workflow maintains state that flows through each node:
+The system uses a dual approach:
+- **Pydantic models** for API validation and response structure
+- **TypedDict** for LangGraph state management
 
-| State Component | Purpose |
-|-----------------|---------|
-| **UserContext** | User identity, scopes, tonality preferences |
-| **WorkflowContext** | Multi-step workflow tracking (article ID, resources) |
-| **AgentState** | Messages, routing, tools, iteration control |
+```python
+# Pydantic model for API responses
+class ChatResponse(BaseModel):
+    response: str
+    agent_type: str = "general"
+    routing_reason: str = ""
+    articles: List[Dict[str, Any]] = []
+    ui_action: Optional[Dict[str, Any]] = None
+    navigation: Optional[Dict[str, Any]] = None
+    editor_content: Optional[Dict[str, Any]] = None
+    confirmation: Optional[Dict[str, Any]] = None
+
+# TypedDict for LangGraph state
+class AgentState(TypedDict):
+    # Input
+    messages: Annotated[List[BaseMessage], operator.add]
+    user_context: Optional[UserContext]
+    navigation_context: Optional[NavigationContext]
+
+    # Routing
+    selected_agent: Optional[str]
+    routing_reason: Optional[str]
+    intent: Optional[IntentClassification]
+
+    # Output
+    response_text: Optional[str]
+    ui_action: Optional[Dict[str, Any]]
+    navigation: Optional[Dict[str, Any]]
+    editor_content: Optional[Dict[str, Any]]
+    confirmation: Optional[Dict[str, Any]]
+    referenced_articles: List[Dict[str, Any]]
+
+    # Control Flow
+    is_final: bool
+    requires_hitl: bool
+    hitl_decision: Optional[str]
+    error: Optional[str]
+```
 
 ### 3.2 UserContext Fields
 
@@ -181,20 +257,24 @@ The workflow maintains state that flows through each node:
 |-------|-------------|
 | `user_id`, `name`, `email` | User identity |
 | `scopes` | Authorization scopes (e.g., "macro:analyst") |
-| `role` | Highest role: admin > analyst > editor > reader |
+| `highest_role` | Highest role: admin > analyst > editor > reader |
+| `topic_roles` | Role per topic (e.g., {"macro": "analyst"}) |
 | `chat_tonality_text` | User's preferred chat communication style |
 | `content_tonality_text` | User's preferred article writing style |
 
-### 3.3 WorkflowContext Fields
+### 3.3 NavigationContext Fields
 
 | Field | Description |
 |-------|-------------|
-| `workflow_id` | UUID for tracking |
-| `workflow_type` | research, write, edit, or publish |
-| `current_article_id` | Article being worked on |
-| `current_topic` | Topic context |
-| `pending_resources` | Resources created during workflow |
-| `approval_pending` | HITL approval state |
+| `section` | Current section: home, analyst, editor, admin, profile |
+| `topic` | Current topic slug (if selected) |
+| `role` | Current role context: reader, analyst, editor, admin |
+| `article_id` | Current article being viewed/edited |
+| `article_headline` | Current article headline |
+| `article_status` | Article status: draft, editor, pending_approval, published |
+| `sub_nav` | Sub-navigation state |
+| `view_mode` | View mode (e.g., "list", "detail") |
+| `admin_view` | Admin view type (for global admin) |
 
 ### 3.4 State Flow
 
@@ -203,35 +283,42 @@ Request Start
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  create_initial_state()                                      │
-│  ├── Load UserContext from JWT + DB                         │
-│  ├── Filter available_tools by scopes                       │
-│  ├── Load conversation history from Redis                   │
-│  └── Initialize workflow_context = None                     │
+│  invoke_chat()                                               │
+│  ├── Get singleton graph                                    │
+│  ├── Create initial state with UserContext                  │
+│  └── Generate thread_id for checkpointing                   │
 └─────────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  MainChatAgent.process(state)                                │
-│  ├── Increment iterations                                   │
-│  ├── Route to appropriate sub-agent                         │
-│  └── Delegate or handle directly                            │
+│  router_node                                                 │
+│  ├── Classify intent using LLM                              │
+│  ├── Set selected_agent and routing_reason                  │
+│  └── Return to graph for conditional routing                │
 └─────────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Sub-Agent.process(state)                                    │
-│  ├── Check has_permission(user_context)                     │
-│  ├── Get available tools for user                           │
-│  ├── Execute tools, update state                            │
-│  └── Update workflow_context if needed                      │
+│  handler_node (ui_action, content_gen, editor, etc.)         │
+│  ├── Check user permissions                                 │
+│  ├── Process request based on intent                        │
+│  ├── Set response_text, ui_action, etc.                     │
+│  └── Return updated state                                   │
 └─────────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Finalize                                                    │
-│  ├── Save to conversation memory                            │
-│  └── Return response                                        │
+│  response_builder_node                                       │
+│  ├── Assemble final response from state fields              │
+│  ├── Validate response structure                            │
+│  └── Mark is_final = True                                   │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Return ChatResponse                                         │
+│  ├── Convert state to ChatResponse Pydantic model           │
+│  └── Return to API layer                                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -304,19 +391,6 @@ Users can have multiple scopes, e.g., `["macro:analyst", "equity:reader"]`.
 | Publish article (HITL) | editor | Yes |
 | Get topic prompts | admin | Yes |
 
-### 4.4 Tool Registry
-
-All tools are registered centrally with permission metadata:
-
-| Metadata Field | Purpose |
-|----------------|---------|
-| `required_role` | Minimum role to use the tool |
-| `topic_scoped` | Whether topic permission is required |
-| `global_admin_override` | Whether global:admin bypasses checks |
-| `requires_hitl` | Whether tool triggers human approval |
-
-At runtime, tools are filtered based on the user's scopes before being made available to agents.
-
 ---
 
 ## 5. Human-in-the-Loop Workflow
@@ -344,7 +418,7 @@ At runtime, tools are filtered based on the user's scopes before being made avai
 │  │ PENDING_APPROVAL  │                              │        │      │
 │  └─────────┬─────────┘                              │        │      │
 │            │                                         │        │      │
-│            │ LangGraph interrupt_before              │        │      │
+│            │ LangGraph checkpoint + interrupt        │        │      │
 │            │                                         │        │      │
 │            ▼                                         │        │      │
 │  ┌──────────────────────────────────────────────────┴────────┘      │
@@ -364,26 +438,38 @@ At runtime, tools are filtered based on the user's scopes before being made avai
 
 ### 5.2 HITL Implementation
 
-The system uses LangGraph's native `interrupt_before` pattern for human approval:
+The system uses LangGraph's native checkpointing for human approval:
 
-1. **Trigger**: When `publish_article` tool is invoked
-2. **Pause**: Workflow state is checkpointed to Redis
-3. **Notify**: WebSocket notification sent to user/editor
-4. **Review**: Human reviews via web UI or API
-5. **Resume**: Workflow continues with approval decision
+1. **Trigger**: When editor_workflow_node handles a publish request
+2. **Checkpoint**: Workflow state is saved to Redis
+3. **Response**: ChatResponse includes `confirmation` object with buttons
+4. **Review**: Human reviews via web UI
+5. **Resume**: `resume_chat(thread_id, decision, user_context)` continues workflow
 
-### 5.3 Approval Request Tracking
+```python
+# Resume a paused workflow
+from agents.graph import resume_chat
 
-Approval requests are tracked in the database with:
+response = resume_chat(
+    thread_id="chat_123_abc12345",
+    hitl_decision="approve",  # or "reject"
+    user_context=user_ctx,
+)
+```
 
-| Field | Purpose |
-|-------|---------|
-| `article_id` | Article being approved |
-| `requested_by` | User who submitted |
-| `status` | pending, approved, rejected, expired |
-| `editor_notes` | Submitter's notes |
-| `reviewed_by` | User who reviewed |
-| `review_notes` | Reviewer's feedback |
+### 5.3 Confirmation Response Structure
+
+```python
+class ConfirmationPrompt(BaseModel):
+    id: str              # Unique confirmation ID
+    type: str            # e.g., "publish_approval"
+    title: str           # "Confirm Publication"
+    message: str         # Explanation of what will happen
+    article_id: int      # Related article
+    confirm_label: str   # "Publish Now"
+    cancel_label: str    # "Cancel"
+    confirm_endpoint: str # API endpoint for confirmation
+```
 
 ---
 
@@ -393,62 +479,39 @@ Approval requests are tracked in the database with:
 
 | Feature | Usage | Benefit |
 |---------|-------|---------|
-| **Conditional Edges** | Router decides which agent handles query | Dynamic workflow routing |
-| **Subgraph Composition** | AnalystAgent contains nested graphs | Modular, reusable components |
-| **Human-in-the-Loop** | `interrupt_before` for publish approval | Native HITL support |
-| **Parallel Execution** | Research agents run in parallel | Faster data gathering |
-| **Checkpointing** | Save workflow state to Redis | Resume interrupted workflows |
-| **Streaming** | Stream intermediate agent outputs | Real-time UI updates |
-| **Tool Calling** | ReAct pattern with structured tools | Reliable tool execution |
-| **State Reducers** | Message accumulation | Clean state management |
+| **Singleton Graph** | Graph compiled once at startup | Performance, consistency |
+| **Conditional Edges** | Router decides which handler processes query | Dynamic workflow routing |
+| **Checkpointing** | Save workflow state to Redis | Resume HITL workflows |
+| **State Reducers** | Message accumulation with `operator.add` | Clean state management |
+| **Pydantic Integration** | ChatResponse validation | Type-safe API responses |
 
-### 6.2 Workflow Graph Structure
+### 6.2 Entry Points
+
+| Function | Purpose |
+|----------|---------|
+| `invoke_chat()` | Synchronous chat processing |
+| `ainvoke_chat()` | Async chat processing |
+| `resume_chat()` | Resume paused HITL workflow |
+| `get_graph()` | Get singleton graph instance |
+
+### 6.3 Module Structure
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        LANGGRAPH WORKFLOW                                │
-│                                                                          │
-│    START                                                                 │
-│      │                                                                   │
-│      ▼                                                                   │
-│  ┌────────┐                                                              │
-│  │ Router │ ─────────────────────────────────────────────────────────┐  │
-│  └────┬───┘                                                           │  │
-│       │                                                               │  │
-│       │ Conditional Edges                                             │  │
-│       │                                                               │  │
-│  ┌────┴─────┬──────────────┬──────────────┐                          │  │
-│  │          │              │              │                           │  │
-│  ▼          ▼              ▼              ▼                           │  │
-│ ┌────┐  ┌────────┐  ┌──────────┐  ┌──────────┐                       │  │
-│ │Read│  │Analyst │  │  Editor  │  │ General  │                       │  │
-│ │    │  │        │  │          │  │          │                       │  │
-│ └──┬─┘  └────┬───┘  └────┬─────┘  └────┬─────┘                       │  │
-│    │         │           │             │                              │  │
-│    │    ┌────┴────┐      │             │                              │  │
-│    │    │ SUBGRAPH│      │             │                              │  │
-│    │    │         │      │             │                              │  │
-│    │    │ ┌─────┐ │ ┌────┴────┐        │                              │  │
-│    │    │ │Web  │ │ │INTERRUPT│        │                              │  │
-│    │    │ │Srch │ │ │ BEFORE  │        │                              │  │
-│    │    │ └──┬──┘ │ │(publish)│        │                              │  │
-│    │    │ ┌──┴──┐ │ └────┬────┘        │                              │  │
-│    │    │ │Data │ │      │             │                              │  │
-│    │    │ │Down │ │      │             │                              │  │
-│    │    │ └──┬──┘ │      │             │                              │  │
-│    │    │    ▼    │      │             │                              │  │
-│    │    │ ┌─────┐ │      │             │                              │  │
-│    │    │ │Write│ │      │             │                              │  │
-│    │    │ │Artcl│ │      │             │                              │  │
-│    │    │ └─────┘ │      │             │                              │  │
-│    │    └────┬────┘      │             │                              │  │
-│    │         │           │             │                              │  │
-│    └─────────┴───────────┴─────────────┘                              │  │
-│                         │                                              │  │
-│                         ▼                                              │  │
-│                       END                                              │  │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
+backend/agents/
+├── graph.py              # Singleton graph, invoke_chat(), resume_chat()
+├── state.py              # Pydantic models, TypedDict schemas
+├── nodes/                # Handler node implementations
+│   ├── __init__.py
+│   ├── router_node.py    # Intent classification
+│   ├── ui_action_node.py # Navigation, UI triggers
+│   ├── content_gen_node.py # Article writing
+│   ├── editor_node.py    # Review, publish (HITL)
+│   ├── general_chat_node.py # Q&A, search
+│   ├── entitlements_node.py # Permission questions
+│   └── response_builder.py # Final response assembly
+├── analyst_agent.py      # Research workflows
+├── editor_sub_agent.py   # Editorial sub-agent
+└── ...                   # Other specialist agents
 ```
 
 ---
@@ -458,8 +521,8 @@ Approval requests are tracked in the database with:
 - [Authentication](./01-authentication.md) - OAuth and JWT system
 - [Authorization](./02-authorization_concept.md) - Permissions and access control
 - [User Management](./04-user-management.md) - User roles and groups
-- [Resources](./10-resources-concept.md) - Resource management
-- [Celery Workers](./09-celery-workers.md) - Background task processing
+- [UI Actions](./15-ui-actions.md) - Frontend UI action handling
+- [Unit Testing](./07-unit-testing.md) - Testing strategies
 
 ---
 
@@ -471,4 +534,6 @@ Approval requests are tracked in the database with:
 | **Scope** | Permission string in format `{topic}:{role}` |
 | **Topic** | Content category (macro, equity, fixed_income, esg) |
 | **Tonality** | Writing style/tone configuration for prompts |
-| **Workflow** | Multi-step operation tracked via WorkflowContext |
+| **Intent** | Classified user request type (ui_action, content_generation, etc.) |
+| **Handler Node** | LangGraph node that processes a specific intent type |
+| **Singleton Graph** | Single graph instance reused for all requests |

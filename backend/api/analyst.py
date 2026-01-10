@@ -403,6 +403,76 @@ Please provide your response as JSON with fields: headline, content, keywords, e
         )
 
 
+@router.get("/article/{article_id}", response_model=ArticleResponse)
+async def get_article_for_analyst(
+    topic: str,
+    article_id: int,
+    user_topic: Tuple[dict, str] = Depends(require_analyst_for_topic),
+    db: Session = Depends(get_db)
+):
+    """
+    Get a specific article by ID for analyst view.
+    Analysts can access articles in any status (draft, editor, published).
+    Does not increment readership counter.
+
+    Args:
+        topic: Topic slug from URL path
+        article_id: Article ID
+
+    Returns:
+        Article details
+    """
+    user, validated_topic = user_topic
+
+    # Validate article belongs to this topic
+    validate_article_topic(validated_topic, article_id, db)
+
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+
+    if not article:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Article not found"
+        )
+
+    return article
+
+
+@router.get("/all-articles", response_model=List[ArticleResponse])
+async def get_all_articles_for_analyst(
+    topic: str,
+    offset: int = 0,
+    limit: int = 20,
+    status_filter: Optional[str] = None,
+    user_topic: Tuple[dict, str] = Depends(require_analyst_for_topic),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all articles for analyst view regardless of status.
+    Analysts can see articles in any status (draft, editor, published).
+
+    Args:
+        topic: Topic slug from URL path
+        offset: Number of articles to skip (default: 0)
+        limit: Maximum number of articles to return (default: 20, max: 100)
+        status_filter: Optional filter by status (draft, editor, published)
+
+    Returns:
+        List of articles for the topic
+    """
+    user, validated_topic = user_topic
+    limit = min(limit, 100)
+
+    if status_filter:
+        # Filter by specific status
+        articles = ContentService.get_articles_by_status(db, validated_topic, status_filter, offset, limit)
+    else:
+        # Get all articles regardless of status
+        articles = ContentService.get_all_articles_admin(db, validated_topic, offset, limit)
+
+    return articles
+
+
 @router.post("/article/{article_id}/submit")
 async def submit_article_for_review(
     topic: str,

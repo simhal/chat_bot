@@ -1,6 +1,6 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getAdminArticles, deleteArticle, reactivateArticle, recallArticle, purgeArticle, getPromptModules, updatePromptModule, reorderArticles, editArticle, getGroupResources, deleteResource, getTopics, type PromptModule, type Resource, type Topic } from '$lib/api';
+    import { getAdminArticles, deleteArticle, reactivateArticle, recallArticle, purgeArticle, getPromptModules, updatePromptModule, reorderArticles, editArticle, getGroupResources, deleteResource, getEntitledTopics, type PromptModule, type Resource, type Topic } from '$lib/api';
     import { onMount, onDestroy } from 'svelte';
     import { goto } from '$app/navigation';
     import { page } from '$app/stores';
@@ -58,17 +58,13 @@
     // Check permissions
     $: isGlobalAdmin = $auth.user?.scopes?.includes('global:admin') || false;
 
-    // Topic tabs are visible based on {topic}:admin scope or global:admin
-    $: adminTopics = allTopics.filter(topic => {
-        if (!$auth.user?.scopes) return false;
-        if ($auth.user.scopes.includes('global:admin')) return true;
-        return $auth.user.scopes.includes(`${topic.id}:admin`);
-    });
+    // Admin topics - backend filters by admin entitlements
+    $: adminTopics = allTopics;
 
     $: hasAdminAccess = isGlobalAdmin || adminTopics.length > 0;
 
-    // Redirect if no admin access
-    $: if ($auth.isAuthenticated && !hasAdminAccess) {
+    // Redirect if no admin access (after topics are loaded)
+    $: if ($auth.isAuthenticated && !topicsLoading && !hasAdminAccess) {
         goto('/');
     }
 
@@ -110,7 +106,8 @@
     async function loadTopicsFromDb() {
         try {
             topicsLoading = true;
-            dbTopics = await getTopics();
+            // Use entitled topics API - backend filters by admin entitlements
+            dbTopics = await getEntitledTopics('admin');
             allTopics = dbTopics.map(t => ({ id: t.slug, label: t.title }));
         } catch (e) {
             console.error('Error loading topics:', e);

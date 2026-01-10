@@ -35,7 +35,8 @@ def response_builder_node(state: AgentState) -> Dict[str, Any]:
     logger.info(f"Response built: agent={response.get('agent_type')}, "
                f"has_ui_action={bool(response.get('ui_action'))}, "
                f"has_navigation={bool(response.get('navigation'))}, "
-               f"has_confirmation={bool(response.get('confirmation'))}")
+               f"has_confirmation={bool(response.get('confirmation'))}, "
+               f"has_article_context={bool(response.get('article_context'))}")
 
     return {
         "final_response": response,
@@ -56,7 +57,8 @@ def _build_response_object(state: AgentState) -> Dict[str, Any]:
         ui_action: dict,        # UI action to trigger (optional)
         navigation: dict,       # Navigation command (optional)
         editor_content: dict,   # Content for editor (optional)
-        confirmation: dict      # HITL confirmation (optional)
+        confirmation: dict,     # HITL confirmation (optional)
+        article_context: dict   # Validated article info for context update (optional)
     }
     """
     # Required field - response text
@@ -99,6 +101,10 @@ def _build_response_object(state: AgentState) -> Dict[str, Any]:
     if confirmation:
         response["confirmation"] = _format_confirmation(confirmation)
 
+    article_context = state.get("article_context")
+    if article_context:
+        response["article_context"] = _format_article_context(article_context)
+
     return response
 
 
@@ -128,7 +134,8 @@ def _format_articles(articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "headline": article.get("headline"),
             "status": article.get("status"),
             "created_at": article.get("created_at"),
-            "author": article.get("author")
+            "author": article.get("author"),
+            "url": article.get("url")  # Popup URL for published articles
         })
     return formatted
 
@@ -176,6 +183,17 @@ def _format_confirmation(confirmation: Dict[str, Any]) -> Dict[str, Any]:
         "confirm_endpoint": confirmation.get("confirm_endpoint", ""),
         "confirm_method": confirmation.get("confirm_method", "POST"),
         "confirm_body": confirmation.get("confirm_body", {})
+    }
+
+
+def _format_article_context(article_context: Dict[str, Any]) -> Dict[str, Any]:
+    """Format article context for response - used to update frontend navigation context."""
+    return {
+        "article_id": article_context.get("id") or article_context.get("article_id"),
+        "topic": article_context.get("topic"),
+        "status": article_context.get("status"),
+        "headline": article_context.get("headline"),
+        "keywords": article_context.get("keywords")
     }
 
 

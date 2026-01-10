@@ -16,6 +16,9 @@ from database import get_db
 from models import User, Group
 from auth import create_access_token, create_refresh_token, verify_access_token, verify_refresh_token, revoke_access_token, revoke_refresh_token
 
+# Import shared state models for API
+from agents.state import NavigationContextModel
+
 # Import API routers (will be included after app initialization)
 # from api.admin_prompts import router as admin_prompts_router
 from api.user_profile import router as user_profile_router
@@ -51,13 +54,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     - Content-Security-Policy: Restricts resource loading (API-appropriate policy)
     - Referrer-Policy: Controls referrer information leakage
     - Permissions-Policy: Restricts browser feature access
+
+    Note: Public resource endpoints (/api/r/) are allowed to be embedded in iframes
+    from the same origin to support article HTML rendering in the frontend.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
 
-        # Prevent clickjacking - deny all framing
-        response.headers["X-Frame-Options"] = "DENY"
+        # Check if this is a public resource endpoint that needs to be embeddable
+        is_embeddable_resource = request.url.path.startswith("/api/r/")
 
         # Prevent MIME type sniffing
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -68,9 +74,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Enforce HTTPS (1 year, include subdomains)
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
-        # Content Security Policy for API (restrictive)
-        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
-
         # Control referrer information
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
@@ -80,6 +83,33 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "gyroscope=(), magnetometer=(), microphone=(), "
             "payment=(), usb=()"
         )
+
+        if is_embeddable_resource:
+            # For public resource endpoints, allow embedding from frontend origins
+            # This is needed for article HTML to be shown in iframe on the frontend
+            # Get allowed origins from CORS settings
+            allowed_origins = settings.cors_origins.split(",")
+            frame_ancestors = " ".join(allowed_origins) + " 'self'"
+
+            # Allow framing from frontend origins (not DENY or SAMEORIGIN)
+            # X-Frame-Options doesn't support multiple origins, so we rely on CSP frame-ancestors
+            # Remove X-Frame-Options to avoid conflicts with CSP
+            if "X-Frame-Options" in response.headers:
+                del response.headers["X-Frame-Options"]
+
+            # CSP for embeddable HTML content - allow styles, scripts, images, and framing from frontend
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: https:; "
+                f"frame-ancestors {frame_ancestors}"
+            )
+        else:
+            # For all other endpoints, deny framing (prevent clickjacking)
+            response.headers["X-Frame-Options"] = "DENY"
+            # Restrictive CSP for API endpoints
+            response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
 
         return response
 
@@ -116,26 +146,16 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
 
 security = HTTPBearer()
 
 
-class NavigationContext(BaseModel):
-    section: str
-    topic: Optional[str] = None  # Current topic (if user selected one)
-    article_id: Optional[int] = None  # Current article being edited/viewed
-    article_headline: Optional[str] = None  # Current article headline
-    article_keywords: Optional[str] = None  # Current article keywords
-    sub_nav: Optional[str] = None
-    role: Optional[str] = None  # Current role context: reader, analyst, editor, admin
-
-
 class ChatMessage(BaseModel):
     message: str
-    navigation_context: Optional[NavigationContext] = None
+    navigation_context: Optional[NavigationContextModel] = None
 
 
 class ArticleReference(BaseModel):
@@ -266,14 +286,12 @@ except ImportError as e:
 
 # Include new multi-agent workflow routers
 try:
-    from api.tasks import router as tasks_router
     from api.approvals import router as approvals_router
     from api.websocket import router as websocket_router
 
-    app.include_router(tasks_router)
     app.include_router(approvals_router)
     app.include_router(websocket_router)
-    logger.info("Multi-agent workflow routers loaded: tasks, approvals, websocket")
+    logger.info("Multi-agent workflow routers loaded: approvals, websocket")
 except ImportError as e:
     print(f"Warning: Multi-agent workflow routers not available: {e}")
 
@@ -594,18 +612,10 @@ async def chat(
         # Build user context from JWT payload and database
         user_context = UserContextService.build(user, db)
 
-        # Build navigation context dict if provided (includes role for context)
+        # Use Pydantic model's to_dict() for clean conversion
         nav_context = None
         if chat_message.navigation_context:
-            nav_context = {
-                "section": chat_message.navigation_context.section,
-                "topic": chat_message.navigation_context.topic,
-                "article_id": chat_message.navigation_context.article_id,
-                "article_headline": chat_message.navigation_context.article_headline,
-                "article_keywords": chat_message.navigation_context.article_keywords,
-                "sub_nav": chat_message.navigation_context.sub_nav,
-                "role": chat_message.navigation_context.role,  # Current role: reader, analyst, editor, admin
-            }
+            nav_context = chat_message.navigation_context.to_dict()
             logger.info(f"📍 Chat API - Navigation context received: section={nav_context.get('section')}, role={nav_context.get('role')}, article_id={nav_context.get('article_id')}")
 
         agent_service = AgentService(user_id, db, user_context=user_context)
@@ -680,6 +690,24 @@ async def chat(
             )
             logger.info(f"🎯 Chat API - Returning ui_action: type={ui_action.type}, params={ui_action.params}")
 
+        # Build HITL confirmation if present
+        confirmation = None
+        if result.get("confirmation"):
+            conf = result["confirmation"]
+            confirmation = ConfirmationPrompt(
+                id=conf.get("id", ""),
+                type=conf.get("type", ""),
+                title=conf.get("title", "Confirm"),
+                message=conf.get("message", ""),
+                article_id=conf.get("article_id"),
+                confirm_label=conf.get("confirm_label", "Confirm"),
+                cancel_label=conf.get("cancel_label", "Cancel"),
+                confirm_endpoint=conf.get("confirm_endpoint", ""),
+                confirm_method=conf.get("confirm_method", "POST"),
+                confirm_body=conf.get("confirm_body", {})
+            )
+            logger.info(f"🔔 Chat API - Returning confirmation: type={confirmation.type}, endpoint={confirmation.confirm_endpoint}")
+
         # Log the final response structure
         if editor_content:
             logger.info(f"📤 Chat API - Returning editor_content: headline={editor_content.headline[:50] if editor_content.headline else 'None'}, content_len={len(editor_content.content or '')}, action={editor_content.action}")
@@ -691,7 +719,8 @@ async def chat(
             articles=article_references if article_references else None,
             navigation=nav_command,
             editor_content=editor_content,
-            ui_action=ui_action
+            ui_action=ui_action,
+            confirmation=confirmation
         )
 
     except Exception as e:

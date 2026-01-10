@@ -450,7 +450,7 @@ async def resume_workflow(
         The result of the resumed workflow
     """
     try:
-        from agents.main_graph import MainChatGraph
+        from agents.graph import resume_chat
         from agents.state import create_user_context
 
         user_id = user.get("sub")
@@ -474,16 +474,15 @@ async def resume_workflow(
             surname=user.get("surname"),
         )
 
-        # Create graph and resume
-        graph = MainChatGraph(
+        # Resume workflow using singleton graph
+        response = resume_chat(
+            thread_id=thread_id,
+            hitl_decision=request.decision,
             user_context=user_ctx,
-            enable_hitl=True
         )
 
-        result = graph.resume(
-            thread_id=thread_id,
-            hitl_decision=request.decision
-        )
+        # Convert ChatResponse to dict
+        result = response.model_dump()
 
         logger.info(f"Workflow {thread_id} resumed: {result.get('agent_type')}")
 
@@ -527,6 +526,7 @@ async def get_workflow_status(
             try:
                 from langgraph.checkpoint.redis import RedisSaver
                 checkpointer = RedisSaver.from_conn_string(redis_url)
+                checkpointer.setup()
             except Exception:
                 checkpointer = MemorySaver()
         else:

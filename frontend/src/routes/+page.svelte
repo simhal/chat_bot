@@ -1,6 +1,6 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle, getTopics, getArticlePublicationResources, getPublishedArticleHtmlUrl, getPublishedArticlePdfUrl, type Topic as TopicType, type ArticlePublicationResources } from '$lib/api';
+    import { getPublishedArticles, getArticle, downloadArticlePDF, searchArticles, rateArticle, getEntitledTopics, getArticlePublicationResources, getPublishedArticleHtmlUrl, getPublishedArticlePdfUrl, type Topic as TopicType, type ArticlePublicationResources } from '$lib/api';
     import { PUBLIC_LINKEDIN_CLIENT_ID, PUBLIC_LINKEDIN_REDIRECT_URI } from '$env/static/public';
     import Markdown from '$lib/components/Markdown.svelte';
     import { onMount, onDestroy, tick } from 'svelte';
@@ -59,13 +59,17 @@
     let topicsLoadedForUser: string | null = null; // Track which user we loaded topics for
 
     // Dynamic valid tabs based on loaded topics (chat removed - now in split pane)
-    $: validTabs = ['search', ...dbTopics.filter(t => t.visible && t.active).map(t => t.slug)];
+    // Backend already filters by visible=true and user entitlements for reader role
+    // 'home' is the landing page with no topic selected
+    $: validTabs = ['home', 'search', ...dbTopics.map(t => t.slug)];
 
     async function loadTopicsFromDb() {
         if (topicsLoading) return; // Prevent concurrent loads
         try {
             topicsLoading = true;
-            dbTopics = await getTopics(true, true); // active_only, visible_only
+            // Use entitled topics API - returns only topics user can access as reader
+            // Backend filters by: active=true, visible=true, and user has reader entitlement
+            dbTopics = await getEntitledTopics('reader');
             topicsLoadedForUser = $auth.user?.email || 'authenticated';
         } catch (e) {
             console.error('Error loading topics:', e);
@@ -147,25 +151,37 @@
 
         // Update URL to keep Header navbar in sync
         if (updateUrl && browser) {
-            goto(`/?tab=${tab}`, { replaceState: true, noScroll: true });
+            if (tab === 'home') {
+                goto('/', { replaceState: true, noScroll: true });
+            } else {
+                goto(`/?tab=${tab}`, { replaceState: true, noScroll: true });
+            }
         }
 
         // Update navigation context for the chat panel
         if (tab === 'search') {
             navigationContext.setContext({ section: 'search', topic: null, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
+        } else if (tab === 'home') {
+            // True home - clean context with no topic selected
+            navigationContext.setContext({ section: 'home', topic: null, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
         } else {
             // It's a topic slug
             navigationContext.setContext({ section: 'home', topic: tab, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
         }
 
-        // Load articles for the selected topic (but not for search)
-        if (tab !== 'search') {
+        // Load articles for topic tabs only (not for search or home)
+        if (tab !== 'search' && tab !== 'home') {
             loadArticles(tab);
         }
 
         // Reset search results when switching away from search tab
         if (tab !== 'search') {
             searchResults = [];
+        }
+
+        // Clear articles when going to home (no topic)
+        if (tab === 'home') {
+            articles = [];
         }
     }
 
@@ -256,24 +272,27 @@
         const tabParam = urlParams.get('tab') as Tab | null;
         const hash = window.location.hash;
 
-        // Switch to tab if specified in URL, otherwise default to first topic or search
+        // Switch to tab if specified in URL, otherwise default to 'home' (no topic selected)
         if (tabParam && validTabs.includes(tabParam)) {
             currentTab = tabParam;
         } else {
-            // Default to first topic if available, otherwise search
-            const visibleTopics = dbTopics.filter(t => t.visible && t.active);
-            currentTab = visibleTopics.length > 0 ? visibleTopics[0].slug : 'search';
+            // No tab specified - go to true home with no topic selected
+            currentTab = 'home';
         }
 
         // Update navigation context
         if (currentTab === 'search') {
             navigationContext.setContext({ section: 'search', topic: null, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
+        } else if (currentTab === 'home') {
+            // True home - no topic selected
+            navigationContext.setContext({ section: 'home', topic: null, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
         } else {
+            // Topic-specific view
             navigationContext.setContext({ section: 'home', topic: currentTab, subNav: null, articleId: null, articleHeadline: null, role: 'reader' });
         }
 
-        // Load articles for the current tab (but not for search)
-        if (currentTab !== 'search') {
+        // Load articles for topic tabs only (not for search or home)
+        if (currentTab !== 'search' && currentTab !== 'home') {
             await loadArticles(currentTab);
         }
 
@@ -299,8 +318,9 @@
         }
     }
 
-    // React to URL changes
-    $: if (browser && $auth.isAuthenticated && $page.url && !topicsLoading) {
+    // React to URL changes - watch the search string specifically for query param changes
+    $: urlSearch = $page.url.search;
+    $: if (browser && $auth.isAuthenticated && urlSearch !== undefined && !topicsLoading) {
         handleDeepLink();
     }
 
@@ -647,7 +667,26 @@
                     <div class="error-message">{error}</div>
                 {/if}
 
-                {#if currentTab === 'search'}
+                {#if currentTab === 'home'}
+                    <div class="home-container">
+                        <div class="welcome-message">
+                            <h2>Welcome to Research Platform</h2>
+                            <p>Select a topic from the navigation above to browse articles, or use the search to find specific content.</p>
+                            {#if dbTopics.length > 0}
+                                <div class="topic-cards">
+                                    {#each dbTopics as topic}
+                                        <button class="topic-card" on:click={() => handleTabChange(topic.slug)}>
+                                            <h3>{topic.title}</h3>
+                                            {#if topic.description}
+                                                <p>{topic.description}</p>
+                                            {/if}
+                                        </button>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </div>
+                    </div>
+                {:else if currentTab === 'search'}
                     <div class="search-container">
                         {#if selectedArticle}
                             <!-- Article Detail View -->
@@ -875,32 +914,23 @@
 {#if selectedArticle && !showRatingModal}
     <div class="modal-overlay" on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>
         <div class="modal large" on:click|stopPropagation>
-            <!-- Fixed Header with Buttons -->
-            <div class="modal-header-fixed">
-                <div class="modal-header">
-                    <h2>{selectedArticle.headline}</h2>
-                    <button class="close-btn" on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>×</button>
-                </div>
-                <div class="modal-actions-fixed">
-                    <button on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>← Back to Articles</button>
-                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.topic, selectedArticle.id)}>
-                        Download PDF
-                    </button>
-                    <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
-                        Rate Article
-                    </button>
-                </div>
+            <!-- Minimal header with close and rate buttons (popup has its own Back/Download) -->
+            <div class="modal-header-minimal">
+                <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
+                    Rate Article
+                </button>
+                <button class="close-btn" on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>×</button>
             </div>
 
-            <!-- Content: HTML iframe or markdown fallback -->
-            {#if selectedArticleResources?.hash_ids?.html}
+            <!-- Content: Popup iframe or markdown fallback -->
+            {#if selectedArticleResources?.hash_ids?.popup}
                 <iframe
-                    src={getPublishedArticleHtmlUrl(selectedArticleResources.hash_ids.html)}
+                    src={getPublishedArticleHtmlUrl(selectedArticleResources.hash_ids.popup)}
                     title={selectedArticle.headline}
                     class="article-html-iframe"
                 ></iframe>
             {:else}
-                <!-- Fallback to markdown for articles without HTML resource -->
+                <!-- Fallback to markdown for articles without popup resource -->
                 <div class="modal-content-scrollable">
                     <div class="modal-meta">
                         <span><strong>Published:</strong> {formatDate(selectedArticle.created_at)}</span>
@@ -1190,6 +1220,71 @@
         cursor: not-allowed;
     }
 
+    /* Home Container */
+    .home-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2rem;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+    }
+
+    .welcome-message {
+        max-width: 800px;
+        text-align: center;
+        padding: 3rem 2rem;
+    }
+
+    .welcome-message h2 {
+        margin: 0 0 1rem 0;
+        color: #1a1a1a;
+        font-size: 2rem;
+        font-weight: 600;
+    }
+
+    .welcome-message p {
+        color: #6b7280;
+        margin-bottom: 2rem;
+        font-size: 1.1rem;
+    }
+
+    .topic-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-top: 2rem;
+    }
+
+    .topic-card {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 1.5rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-align: left;
+    }
+
+    .topic-card:hover {
+        border-color: #3b82f6;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        transform: translateY(-2px);
+    }
+
+    .topic-card h3 {
+        margin: 0 0 0.5rem 0;
+        color: #1a1a1a;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .topic-card p {
+        margin: 0;
+        color: #6b7280;
+        font-size: 0.875rem;
+    }
+
     /* Articles Container */
     .articles-container {
         flex: 1;
@@ -1469,9 +1564,12 @@
     }
 
     .modal.large {
+        position: relative;
         min-width: 600px;
         max-width: 1000px;
         width: 80vw;
+        height: 90vh;
+        max-height: 90vh;
         display: flex;
         flex-direction: column;
         padding: 0;
@@ -1483,6 +1581,55 @@
         flex-shrink: 0;
         background: white;
         border-bottom: 1px solid #e0e0e0;
+    }
+
+    .modal-header-minimal {
+        flex-shrink: 0;
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background: rgba(255, 255, 255, 0.95);
+        position: absolute;
+        top: 0;
+        right: 0;
+        z-index: 10;
+        border-bottom-left-radius: 8px;
+    }
+
+    .modal-header-minimal .rate-btn {
+        padding: 0.5rem 1rem;
+        background: #4caf50;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .modal-header-minimal .rate-btn:hover {
+        background: #45a049;
+    }
+
+    .modal-header-minimal .close-btn {
+        background: #f3f4f6;
+        border: none;
+        border-radius: 4px;
+        width: 32px;
+        height: 32px;
+        cursor: pointer;
+        font-size: 1.25rem;
+        color: #6b7280;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .modal-header-minimal .close-btn:hover {
+        background: #e5e7eb;
+        color: #1f2937;
     }
 
     .modal-header {
@@ -1547,6 +1694,22 @@
         background: #2563eb;
     }
 
+    .modal-actions-fixed .open-newtab-btn {
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        font-weight: 500;
+        font-size: 0.875rem;
+        background: #6366f1;
+        color: white;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .modal-actions-fixed .open-newtab-btn:hover {
+        background: #4f46e5;
+    }
+
     .modal-actions-fixed .rate-btn {
         background: #4caf50;
         color: white;
@@ -1566,7 +1729,7 @@
     .article-html-iframe {
         flex: 1;
         width: 100%;
-        min-height: 70vh;
+        min-height: 0;
         border: none;
         background: white;
     }

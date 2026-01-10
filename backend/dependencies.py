@@ -565,9 +565,13 @@ def validate_article_topic(topic: str, article_id: int, db: Session):
             detail=f"Article {article_id} not found"
         )
 
-    # Get the article's topic slug
-    article_topic = db.query(Topic).filter(Topic.id == article.topic_id).first()
-    article_topic_slug = article_topic.slug if article_topic else None
+    # Get the article's topic slug - try topic_id first, fallback to legacy topic field
+    if article.topic_id:
+        article_topic = db.query(Topic).filter(Topic.id == article.topic_id).first()
+        article_topic_slug = article_topic.slug if article_topic else None
+    else:
+        # Fallback to legacy topic field for articles created before topic_id was set
+        article_topic_slug = article.topic
 
     if article_topic_slug != topic:
         raise HTTPException(

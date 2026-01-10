@@ -489,7 +489,10 @@
 
     function handleResourceDragStart(e: DragEvent, resource: Resource) {
         if (!e.dataTransfer) return;
-        const resourceLink = `[${resource.name}](resource:${resource.hash_id})`;
+        // HTML resources get embedded as iframes
+        const resourceLink = resource.resource_type === 'html'
+            ? `[!iframe ${resource.name}](resource:${resource.hash_id})`
+            : `[${resource.name}](resource:${resource.hash_id})`;
         e.dataTransfer.setData('text/plain', resourceLink);
         e.dataTransfer.effectAllowed = 'copy';
     }

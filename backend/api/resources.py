@@ -310,6 +310,10 @@ async def list_group_resources(
     List resources for a specific topic group.
 
     Any user with access to the topic can view resources (for attaching to articles).
+    This includes:
+    1. Resources with group_id matching any of the topic's groups (admin, analyst, editor, reader)
+    2. ARTICLE resources linked to articles in this topic (these have group_id=NULL but are
+       associated via the article_resources table)
     """
     scopes = current_user.get("scopes", [])
 
@@ -332,13 +336,9 @@ async def list_group_resources(
             detail=f"You need access to '{topic}' to view its resources"
         )
 
-    # Get group ID for this topic
-    group = db.query(Group).filter(Group.name == f"{topic}:admin").first()
-    if not group:
-        # If no admin group, try the base group
-        group = db.query(Group).filter(Group.groupname == topic).first()
-
-    group_id = group.id if group else None
+    # Get ALL group IDs for this topic (admin, analyst, editor, reader groups)
+    groups = db.query(Group).filter(Group.groupname == topic).all()
+    group_ids = [g.id for g in groups] if groups else []
 
     # Convert resource_type string to enum if provided
     rt = None
@@ -351,8 +351,9 @@ async def list_group_resources(
                 detail=f"Invalid resource type: {resource_type}"
             )
 
-    resources, total = ResourceService.list_resources(
-        db, rt, group_id, None, search, offset, limit
+    # Use the method that handles both group resources AND article resources for this topic
+    resources, total = ResourceService.list_topic_resources(
+        db, topic, rt, group_ids, search, offset, limit
     )
 
     return ResourceListResponse(
@@ -1511,12 +1512,20 @@ async def serve_public_resource(
                 detail="Resource file not found"
             )
 
+        # Determine cache duration based on content type
+        # HTML files (article popups) can be republished, so use shorter cache
+        # Images and PDFs are immutable, so use long cache
+        if mime_type and mime_type.startswith("text/html"):
+            cache_control = "public, max-age=60"  # 1 minute for HTML (can be republished)
+        else:
+            cache_control = "public, max-age=31536000"  # 1 year for images/PDFs
+
         # Return file as streaming response
         return StreamingResponse(
             io.BytesIO(file_content),
             media_type=mime_type,
             headers={
-                "Cache-Control": "public, max-age=31536000",  # Cache for 1 year
+                "Cache-Control": cache_control,
                 "Content-Disposition": f"inline; filename=\"{filename}\""
             }
         )
@@ -1580,86 +1589,25 @@ async def serve_public_resource(
             }
         )
 
-    # Handle article resources (fallback for old articles without popup HTML file)
+    # Handle article resources - serve stored text content as HTML if available
     if resource_type == "article":
-        # Get the resource to find linked article
-        resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
-        if not resource:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Resource not found"
-            )
-
-        # Find linked article
-        article_link = db.execute(
-            article_resources.select().where(
-                article_resources.c.resource_id == resource.id
-            )
-        ).first()
-
-        if not article_link:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Article not found for this resource"
-            )
-
-        article = db.query(ContentArticle).filter(
-            ContentArticle.id == article_link.article_id
-        ).first()
-
-        if not article:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Article not found"
-            )
-
-        # Get markdown content from text_data
         text_data = resource_data.get("text_data", {})
         content = text_data.get("content", "")
 
-        # Get child resources for PDF and HTML links
-        children = db.query(Resource).filter(
-            Resource.parent_id == resource.id,
-            Resource.is_active == True
-        ).all()
-
-        pdf_hash_id = None
-        html_hash_id = None
-        for child in children:
-            if child.resource_type == ResourceType.PDF:
-                pdf_hash_id = child.hash_id
-            elif child.resource_type == ResourceType.HTML:
-                html_hash_id = child.hash_id
-
-        # Generate popup HTML on-the-fly
-        base_url = os.environ.get("API_BASE_URL", "")
-        created_at_str = article.created_at.isoformat() if article.created_at else ""
-
-        popup_html = ArticleResourceService._generate_article_popup_html(
-            article_id=article.id,
-            headline=article.headline,
-            content=content,
-            topic=article.topic or "",
-            created_at=created_at_str,
-            keywords=article.keywords,
-            readership_count=article.readership_count or 0,
-            rating=article.rating,
-            rating_count=article.rating_count or 0,
-            author=article.author,
-            editor=article.editor,
-            pdf_hash_id=pdf_hash_id,
-            html_hash_id=html_hash_id,
-            db=db,
-            base_url=base_url
-        )
-
-        return Response(
-            content=popup_html,
-            media_type="text/html; charset=utf-8",
-            headers={
-                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
-            }
-        )
+        if content:
+            # Serve stored content as HTML
+            return Response(
+                content=content,
+                media_type="text/html; charset=utf-8",
+                headers={
+                    "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Article resource has no stored content"
+            )
 
     # Unsupported resource type for direct content serving
     raise HTTPException(

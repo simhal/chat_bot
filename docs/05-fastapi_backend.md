@@ -262,30 +262,16 @@ Custom exception handlers for:
 
 ---
 
-## Background Tasks
+## Processing Model
 
-### Celery Integration
+All operations run synchronously within the request lifecycle:
 
-Heavy operations run as Celery tasks:
-
-| Operation | Sync/Async | Why |
-|-----------|------------|-----|
-| Chat response | Sync | Quick response needed |
-| Research workflow | Async | Minutes to complete |
-| Article publishing | Async | HITL workflow |
-| Data download | Async | External APIs |
-
-### Task Status API
-
-Tasks return an ID for status polling:
-
-```json
-{
-  "task_id": "abc-123",
-  "status": "started",
-  "message": "Research in progress..."
-}
-```
+| Operation | Execution | Description |
+|-----------|-----------|-------------|
+| Chat response | Sync | LangGraph workflow |
+| Research workflow | Sync | AnalystAgent research |
+| Article publishing | Sync | EditorSubAgent with HITL |
+| Data download | Sync | External API calls |
 
 ---
 
@@ -356,5 +342,4 @@ Returns service status including database and cache connectivity.
 - [Authentication](./01-authentication.md) - OAuth and JWT details
 - [Authorization](./02-authorization_concept.md) - Permission system
 - [Multi-Agent Architecture](./08-multi-agent-architecture.md) - Chat and agent system
-- [Celery Workers](./09-celery-workers.md) - Background task processing
 - [Databases](./11-databases.md) - Data storage

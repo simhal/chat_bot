@@ -107,11 +107,16 @@ async def reject_article(
     # Get article dict for status check
     article = ContentService.get_article(db, article_id, increment_readership=False)
 
-    # Verify article is in editor status
-    if article["status"] != "editor":
+    # Verify article is in editor status (normalize for comparison)
+    article_status = article["status"]
+    if hasattr(article_status, 'value'):
+        status_str = article_status.value.lower()
+    else:
+        status_str = str(article_status).lower()
+    if status_str != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only articles in editor review can be rejected"
+            detail=f"Only articles in editor review can be rejected. Current status: '{status_str}'"
         )
 
     try:
@@ -149,15 +154,31 @@ async def publish_article(
 
     # Validate article belongs to this topic
     article_model = validate_article_topic(validated_topic, article_id, db)
+    logger.info(f"Publish article {article_id}: article_model.status={article_model.status}")
 
-    # Get article dict for status check
-    article = ContentService.get_article(db, article_id, increment_readership=False)
+    # Query fresh article status directly from database (bypass any caching)
+    # Use db.expire_all() to clear session cache, then re-query
+    db.expire_all()
+    fresh_article = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+    logger.info(f"Publish article {article_id}: fresh_article.status={fresh_article.status if fresh_article else 'None'}")
+
+    # Also try raw SQL to compare
+    from sqlalchemy import text
+    raw_result = db.execute(text(f"SELECT status FROM content_articles WHERE id = {article_id}")).fetchone()
+    logger.info(f"Publish article {article_id}: RAW SQL status={raw_result[0] if raw_result else 'None'}")
 
     # Verify article is in editor status
-    if article["status"] != "editor":
+    article_status = fresh_article.status if fresh_article else article_model.status
+    # Normalize status for comparison (handle enum or string)
+    if hasattr(article_status, 'value'):
+        status_str = article_status.value.lower()
+    else:
+        status_str = str(article_status).lower()
+    logger.info(f"Publish article {article_id}: FINAL status='{status_str}' (raw: {article_status}, type: {type(article_status)})")
+    if status_str != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only articles in editor review can be published"
+            detail=f"Only articles in editor review can be published. Current status: '{status_str}'"
         )
 
     try:
@@ -202,7 +223,8 @@ async def get_article_for_review(
     db: Session = Depends(get_db)
 ):
     """
-    Get a specific article for editor review.
+    Get a specific article for editor view.
+    Editors can access articles with status 'editor' or 'published'.
     Does not increment readership counter.
 
     Args:
@@ -225,4 +247,62 @@ async def get_article_for_review(
             detail="Article not found"
         )
 
+    # Editors can only access editor and published articles
+    if article["status"] not in ["editor", "published"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Editors can only access articles in editor or published status"
+        )
+
     return article
+
+
+@router.get("/all-articles", response_model=List[ArticleResponse])
+async def get_all_articles_for_editor(
+    topic: str,
+    offset: int = 0,
+    limit: int = 20,
+    status_filter: Optional[str] = None,
+    user_topic: Tuple[dict, str] = Depends(require_editor_for_topic),
+    db: Session = Depends(get_db)
+):
+    """
+    Get articles for editor view (published and editor status only).
+    Editors cannot see draft articles.
+
+    Args:
+        topic: Topic slug from URL path
+        offset: Number of articles to skip (default: 0)
+        limit: Maximum number of articles to return (default: 20, max: 100)
+        status_filter: Optional filter by status (editor or published only)
+
+    Returns:
+        List of articles in editor or published status
+    """
+    user, validated_topic = user_topic
+    limit = min(limit, 100)
+
+    # Editors can only see editor and published articles
+    allowed_statuses = ["editor", "published"]
+
+    if status_filter:
+        if status_filter not in allowed_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status filter. Editors can only view: {', '.join(allowed_statuses)}"
+            )
+        articles = ContentService.get_articles_by_status(db, validated_topic, status_filter, offset, limit)
+    else:
+        # Get both editor and published articles
+        # Use search_articles with statuses filter
+        articles = ContentService.search_articles(
+            db=db,
+            topic=validated_topic,
+            statuses=allowed_statuses,
+            limit=limit
+        )
+        # Apply offset manually since search doesn't support it
+        if offset > 0:
+            articles = articles[offset:]
+
+    return articles

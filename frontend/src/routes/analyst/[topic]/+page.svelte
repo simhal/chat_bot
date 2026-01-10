@@ -1,7 +1,7 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, createEmptyArticle, downloadArticlePDF, submitArticleForReview, getTopics, type Topic as TopicType } from '$lib/api';
+    import { getAnalystDraftArticles, deleteArticle, reactivateArticle, createEmptyArticle, downloadArticlePDF, submitArticleForReview, getEntitledTopics, type Topic as TopicType } from '$lib/api';
     import { onMount, onDestroy } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
@@ -61,28 +61,22 @@
         goto(`/analyst/${topicSlug}`);
     }
 
-    // Check if user can access this topic - analyst role or global admin grants access
-    function canAccessTopic(topic: string): boolean {
-        if (!$auth.user?.scopes) return false;
-        // Global admin can access all topics
-        if ($auth.user.scopes.includes('global:admin')) return true;
-        return $auth.user.scopes.includes(`${topic}:analyst`);
-    }
+    // Accessible topics - backend filters by analyst entitlements, sorted by order
+    $: accessibleTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
 
-    // Filter topics to only show those the user has analyst access to
-    $: accessibleTopics = dbTopics
-        .filter(topic => canAccessTopic(topic.slug))
-        .sort((a, b) => a.sort_order - b.sort_order);
+    // Check if current topic is in accessible list
+    $: canAccessCurrentTopic = accessibleTopics.some(t => t.slug === currentTopic);
 
-    // Redirect if user doesn't have permission
-    $: if ($auth.isAuthenticated && currentTopic && !topicsLoading && !canAccessTopic(currentTopic)) {
+    // Redirect if user doesn't have permission for current topic
+    $: if ($auth.isAuthenticated && currentTopic && !topicsLoading && !canAccessCurrentTopic) {
         goto('/analyst');
     }
 
     async function loadTopicsFromDb() {
         try {
             topicsLoading = true;
-            dbTopics = await getTopics(); // Show all topics in role dropdown
+            // Use entitled topics API - backend filters by analyst entitlements
+            dbTopics = await getEntitledTopics('analyst');
         } catch (e) {
             console.error('Error loading topics:', e);
             dbTopics = [];
@@ -273,6 +267,18 @@
         return { success: true, action: 'close_modal', message: 'Modal closed' };
     }
 
+    // Notification handler - article was submitted via chat command
+    async function handleArticleSubmittedAction(action: UIAction): Promise<ActionResult> {
+        // Refresh the article list to show updated status
+        await loadArticles();
+        // Close modal if it was open
+        if (selectedArticle) {
+            selectedArticle = null;
+            navigationContext.clearArticle();
+        }
+        return { success: true, action: 'article_submitted', message: 'Article list refreshed' };
+    }
+
     onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
@@ -286,6 +292,7 @@
             actionStore.registerHandler('view_article', handleViewArticleAction),
             actionStore.registerHandler('edit_article', handleEditArticleAction),
             actionStore.registerHandler('submit_article', handleSubmitArticleAction),
+            actionStore.registerHandler('article_submitted', handleArticleSubmittedAction),
             actionStore.registerHandler('select_topic', handleSelectTopicAction),
             actionStore.registerHandler('download_pdf', handleDownloadPdfAction),
             actionStore.registerHandler('close_modal', handleCloseModalAction),

@@ -7,8 +7,9 @@ from pydantic import BaseModel, Field, field_validator
 from database import get_db
 
 # Reserved slugs that cannot be used as topic names
-# These would collide with navigation routes like /admin/global, /admin/content
-RESERVED_SLUGS = {"global", "content", "edit"}
+# These would collide with navigation routes like /admin/content
+# Note: "global" is NOT reserved - it's a legitimate system topic for global content
+RESERVED_SLUGS = {"content", "edit"}
 from models import Topic, Group, ContentArticle
 from dependencies import get_current_user, require_admin
 import logging
@@ -215,6 +216,78 @@ async def list_public_topics(
     ]
 
 
+@router.get("/entitled", response_model=List[TopicListResponse])
+async def list_entitled_topics(
+    role: str = "reader",
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """
+    List topics the user is entitled to access at the specified role level.
+
+    This endpoint is used by:
+    - Analyst section: role=analyst (shows topics where user can create content)
+    - Editor section: role=editor (shows topics where user can review/publish)
+    - Admin section: role=admin (shows topics where user has admin access)
+
+    Args:
+        role: Minimum role required (reader, analyst, editor, admin)
+
+    Returns:
+        List of topics user can access at the given role level
+    """
+    from services.permission_service import PermissionService
+
+    # Validate role parameter
+    valid_roles = ["reader", "analyst", "editor", "admin"]
+    if role not in valid_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}"
+        )
+
+    # Get user scopes
+    user_scopes = user.get("scopes", [])
+
+    # Get accessible topics for this role
+    accessible_slugs = PermissionService.get_accessible_topics(user_scopes, role)
+
+    # Build query
+    query = db.query(Topic).filter(Topic.active == True)
+
+    # For reader role, also filter by visible=True
+    # (readers should only see topics marked as visible in the reader section)
+    if role == "reader":
+        query = query.filter(Topic.visible == True)
+
+    # Filter by accessible topics (unless user has global access)
+    if accessible_slugs != ["*"]:
+        if not accessible_slugs:
+            return []  # No access to any topics
+        query = query.filter(Topic.slug.in_(accessible_slugs))
+
+    topics = query.order_by(Topic.sort_order, Topic.title).all()
+
+    return [
+        TopicListResponse(
+            id=t.id,
+            slug=t.slug,
+            title=t.title,
+            description=t.description,
+            visible=t.visible,
+            active=t.active,
+            article_count=t.article_count,
+            access_mainchat=t.access_mainchat,
+            icon=t.icon,
+            color=t.color,
+            sort_order=t.sort_order,
+            article_order=t.article_order,
+            agent_type=t.agent_type
+        )
+        for t in topics
+    ]
+
+
 @router.get("/{slug}", response_model=TopicResponse)
 async def get_topic(
     slug: str,
@@ -389,7 +462,15 @@ async def delete_topic(
     Use force=true to delete anyway (articles will have topic_id set to NULL).
 
     Note: Associated groups will be deleted due to CASCADE.
+    Note: The 'global' topic cannot be deleted.
     """
+    # Protect the global topic from deletion
+    if slug == "global":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The 'global' topic cannot be deleted. It is a system topic."
+        )
+
     topic = db.query(Topic).filter(Topic.slug == slug).first()
 
     if not topic:

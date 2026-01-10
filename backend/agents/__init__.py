@@ -1,9 +1,24 @@
 """Multi-agent system components."""
 
-from agents.state import AgentState, UserContext, WorkflowContext
+# Core state types
+from agents.state import (
+    AgentState,
+    UserContext,
+    NavigationContext,
+    ChatResponse,
+    NavigationContextModel,
+    UserContextModel,
+    create_initial_state,
+    create_user_context,
+    create_navigation_context,
+)
+
+# Main graph entry point (singleton)
+from agents.graph import invoke_chat, ainvoke_chat, resume_chat, get_graph
+
+# Specialist agents
 from agents.base_agent import BaseSpecialistAgent
 from agents.router_agent import RouterAgent
-from agents.main_chat_agent import MainChatAgent
 from agents.content_agent import ContentAgent
 from agents.graph_builder import MultiAgentGraph
 from agents.resource_query_agent import (
@@ -13,7 +28,7 @@ from agents.resource_query_agent import (
 )
 from agents.resource_processing_agent import ResourceProcessingAgent
 
-# New multi-agent architecture
+# Analyst agents
 from agents.analyst_agent import AnalystAgent
 from agents.article_query_agent import ArticleQueryAgent
 from agents.web_search_agent import WebSearchAgent
@@ -33,11 +48,21 @@ __all__ = [
     # Core state
     "AgentState",
     "UserContext",
-    "WorkflowContext",
+    "NavigationContext",
+    "ChatResponse",
+    "NavigationContextModel",
+    "UserContextModel",
+    "create_initial_state",
+    "create_user_context",
+    "create_navigation_context",
+    # Main graph API
+    "invoke_chat",
+    "ainvoke_chat",
+    "resume_chat",
+    "get_graph",
     # Base components
     "BaseSpecialistAgent",
     "RouterAgent",
-    "MainChatAgent",
     "ContentAgent",
     "MultiAgentGraph",
     # Resource agents

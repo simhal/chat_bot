@@ -33,10 +33,6 @@ graph TB
         end
     end
 
-    subgraph Workers["Background Workers"]
-        Celery[Celery Workers]
-    end
-
     subgraph Data["Data Layer"]
         PostgreSQL[(PostgreSQL)]
         Redis[(Redis)]
@@ -61,9 +57,6 @@ graph TB
     Router --> Analyst_Agent
     Router --> Editor_Agent
     Router --> Specialists
-
-    Agents --> Celery
-    Celery --> Redis
 
     Services --> PostgreSQL
     Services --> Redis

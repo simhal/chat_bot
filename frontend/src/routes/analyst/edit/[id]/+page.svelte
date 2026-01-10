@@ -2,7 +2,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/stores/auth';
-    import { getArticle, editArticle, chatWithContentAgent, submitArticleForReview, getArticleResources, getGlobalResources, getGroupResources, getResource, getResourceContentUrl, type Resource } from '$lib/api';
+    import { getAnalystArticle, editArticle, chatWithContentAgent, submitArticleForReview, getArticleResources, getGlobalResources, getGroupResources, getResource, getResourceContentUrl, type Resource } from '$lib/api';
     import { onMount, onDestroy } from 'svelte';
     import Markdown from '$lib/components/Markdown.svelte';
     import ResourceEditor from '$lib/components/ResourceEditor.svelte';
@@ -91,7 +91,7 @@
                 return;
             }
 
-            article = await getArticle(storedTopic, articleId);
+            article = await getAnalystArticle(storedTopic, articleId);
 
             if (!canEditTopic(article.topic)) {
                 error = 'You do not have permission to edit this article';
@@ -110,6 +110,7 @@
                 articleId: article.id,
                 articleHeadline: article.headline,
                 articleKeywords: article.keywords || null,
+                articleStatus: article.status || null,
                 role: 'analyst'
             });
 
@@ -510,6 +511,13 @@
         return { success: true, action: 'browse_resources', message: 'Resources panel opened' };
     }
 
+    async function handleArticleSubmittedAction(action: UIAction): Promise<ActionResult> {
+        // Article was submitted - navigate back to analyst hub
+        const articleTopic = article?.topic || getStoredTopic();
+        await goto(articleTopic ? `/analyst/${articleTopic}` : '/analyst');
+        return { success: true, action: 'article_submitted', message: 'Article submitted, returning to hub' };
+    }
+
     onMount(() => {
         loadArticle();
 
@@ -524,7 +532,8 @@
             actionStore.registerHandler('switch_view_preview', handleSwitchViewPreviewAction),
             actionStore.registerHandler('switch_view_resources', handleSwitchViewResourcesAction),
             actionStore.registerHandler('open_resource_modal', handleOpenResourceModalAction),
-            actionStore.registerHandler('browse_resources', handleBrowseResourcesAction)
+            actionStore.registerHandler('browse_resources', handleBrowseResourcesAction),
+            actionStore.registerHandler('article_submitted', handleArticleSubmittedAction)
         );
     });
 

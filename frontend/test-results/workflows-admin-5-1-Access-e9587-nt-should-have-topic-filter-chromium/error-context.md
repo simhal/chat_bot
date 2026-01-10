@@ -5,8 +5,8 @@
   - banner [ref=e3]
   - generic [ref=e4]:
     - generic [ref=e6]:
-      - heading "500" [level=1] [ref=e7]
-      - paragraph [ref=e8]: Internal Error
+      - heading "404" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Not Found
     - separator [ref=e9]
     - generic [ref=e12]:
       - generic [ref=e14]:

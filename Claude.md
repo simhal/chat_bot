@@ -29,11 +29,9 @@ This is a full-stack AI chatbot application with LinkedIn OAuth authentication, 
 - `auth.py` - OAuth authentication logic
 - `database.py` - Database connection and session management
 - `redis_client.py` - Redis connection utilities
-- `celery_app.py` - Celery worker configuration
 - `services/` - Business logic services (content, vector search, agent orchestration)
 - `agents/` - Multi-agent AI system (MainChatAgent, AnalystAgent, EditorSubAgent, etc.)
 - `api/` - API route handlers
-- `tasks/` - Celery background tasks for heavy agent workflows
 - `alembic/` - Database migration scripts
 
 ### Frontend (`/frontend`)
@@ -191,9 +189,7 @@ chatbot-app/
 │   ├── alembic/            # Database migrations
 │   ├── api/                # API route handlers
 │   ├── services/           # Business logic services
-│   ├── tasks/              # Celery background tasks
 │   ├── main.py             # FastAPI app entry point
-│   ├── celery_app.py       # Celery worker configuration
 │   ├── models.py           # SQLAlchemy & Pydantic models
 │   ├── auth.py             # OAuth authentication
 │   ├── database.py         # Database setup
@@ -242,9 +238,3 @@ chatbot-app/
 - Verify redirect URI matches LinkedIn app settings exactly
 - Check that client ID is correct in both backend and frontend
 - Review network tab in browser for OAuth flow errors
-
-### Celery Worker Issues
-- Check worker logs: `docker-compose logs celery-worker`
-- Verify Redis is running and accessible
-- Check task status via `/api/tasks/{task_id}` endpoint
-- Restart workers: `docker-compose restart celery-worker`

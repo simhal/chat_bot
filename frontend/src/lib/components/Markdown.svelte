@@ -18,10 +18,22 @@
 
     // Pre-process markdown to convert resource links to regular links with permanent URLs
     function preprocessResourceLinks(markdown: string): string {
-        // Pattern: [name](resource:hash_id)
+        // Pattern for iframe embeds: [!iframe name](resource:hash_id)
+        const iframePattern = /\[!iframe ([^\]]+)\]\(resource:([a-zA-Z0-9]+)\)/g;
+
+        // First, handle iframe embeds
+        let processed = markdown.replace(iframePattern, (match, name, hashId) => {
+            const contentUrl = getResourceContentUrl(hashId);
+            // Return an iframe embed with responsive container
+            return `<div class="resource-iframe-container">
+                <iframe src="${contentUrl}" title="${name}" loading="lazy" sandbox="allow-scripts allow-same-origin"></iframe>
+            </div>`;
+        });
+
+        // Pattern for regular resource links: [name](resource:hash_id)
         const resourcePattern = /\[([^\]]+)\]\(resource:([a-zA-Z0-9]+)\)/g;
 
-        return markdown.replace(resourcePattern, (match, name, hashId) => {
+        return processed.replace(resourcePattern, (match, name, hashId) => {
             // Convert to a regular markdown link with the permanent resource URL
             const contentUrl = getResourceContentUrl(hashId);
             return `[${name}](${contentUrl})`;
@@ -50,7 +62,12 @@
 
         // Sanitize to prevent XSS - allow our custom attributes and elements
         return DOMPurify.sanitize(html, {
-            ADD_ATTR: ['data-hash-id', 'data-name', 'data-resource-type', 'target', 'data-goto-path'],
+            ADD_ATTR: [
+                'data-hash-id', 'data-name', 'data-resource-type', 'target', 'data-goto-path',
+                // iframe attributes
+                'src', 'width', 'height', 'frameborder', 'allow', 'allowfullscreen',
+                'loading', 'referrerpolicy', 'sandbox', 'srcdoc', 'name', 'title'
+            ],
             ADD_TAGS: ['iframe']
         });
     }
@@ -436,5 +453,23 @@
     .markdown-content :global(.goto-button::before) {
         content: '→';
         font-size: 1rem;
+    }
+
+    /* Iframe container for embedded HTML resources */
+    .markdown-content :global(.resource-iframe-container) {
+        width: 100%;
+        margin: 1rem 0;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        background: #f8f9fa;
+    }
+
+    .markdown-content :global(.resource-iframe-container iframe) {
+        width: 100%;
+        height: 600px;
+        max-height: 80vh;
+        border: none;
+        display: block;
     }
 </style>

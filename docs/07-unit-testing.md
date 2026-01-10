@@ -290,7 +290,6 @@ The `docker-compose.test.yml` provides isolated test infrastructure:
 | `backend-test` | 8001 | Backend for API tests |
 | `backend-e2e` | 8000 | Backend for E2E tests |
 | `frontend-test` | 3000 | Frontend for E2E tests |
-| `celery-worker-test` | - | Background worker for E2E |
 
 ### Starting Containers Manually
 

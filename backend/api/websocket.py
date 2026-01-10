@@ -308,7 +308,7 @@ async def send_notification(user_id: str, notification: dict):
 
 def send_notification_sync(user_id: str, notification: dict):
     """
-    Synchronous version for use in Celery tasks.
+    Synchronous version for use in background tasks.
 
     Uses standard Redis client instead of async.
     """

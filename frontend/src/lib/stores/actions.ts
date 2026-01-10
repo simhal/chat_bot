@@ -23,6 +23,10 @@ export type UIActionType =
 	| 'view_article'
 	| 'edit_article'
 	| 'submit_article'
+	// Notification Actions (sent after backend operations complete)
+	| 'article_submitted'
+	| 'article_published'
+	| 'article_rejected'
 	// Editor Hub Page Actions
 	| 'reject_article'
 	| 'publish_article'
@@ -55,7 +59,15 @@ export type UIActionType =
 	| 'cancel_action'
 	// Context Update Actions (triggered by chat to request article/resource info)
 	| 'select_article'
-	| 'select_resource';
+	| 'select_resource'
+	// Navigation Actions (emulate button clicks for better UX)
+	| 'goto_home'
+	| 'goto_analyst'
+	| 'goto_editor'
+	| 'goto_topic_admin'
+	| 'goto_admin_global'
+	| 'goto_profile'
+	| 'goto_search';
 
 /**
  * UI Action payload sent from the chatbot.

@@ -65,7 +65,7 @@ class ArticleResourceService:
         Returns:
             HTML string for embedding the resource
         """
-        content_url = f"{base_url}/api/resources/content/{hash_id}"
+        content_url = f"{base_url}/api/r/{hash_id}"
         safe_name = html.escape(name)
 
         if resource_type == 'image':
@@ -95,6 +95,19 @@ class ArticleResourceService:
                 <cite style="display:block;font-weight:600;margin-bottom:0.5rem;font-style:normal;">{safe_name}</cite>
                 <a href="{content_url}" target="_blank" style="color:#3b82f6;text-decoration:none;">View Full Text</a>
             </blockquote>'''
+
+        elif resource_type == 'article':
+            # For ARTICLE resources, render as a clickable card/link
+            # The popup HTML includes JavaScript that intercepts these links
+            # and opens them in an overlay modal instead of navigating
+            # NOTE: No indentation to avoid markdown treating closing tags as code blocks
+            return f'<div style="border:1px solid #3b82f6;border-radius:8px;padding:1rem;margin:1rem 0;background:#eff6ff;"><a href="{content_url}" style="color:#1e40af;text-decoration:none;font-weight:600;font-size:1.1em;display:block;">📄 {safe_name}</a><div style="margin-top:0.5rem;font-size:0.875rem;color:#3b82f6;">Click to view linked article</div></div>'
+
+        elif resource_type == 'html':
+            # For HTML resources, embed as iframe with responsive height
+            return f'''<div style="margin:1rem 0;">
+                <iframe src="{content_url}" style="width:100%;height:600px;max-height:80vh;border:1px solid #e5e7eb;border-radius:8px;" title="{safe_name}"></iframe>
+            </div>'''
 
         else:
             return f'''<a href="{content_url}" target="_blank" style="color:#3b82f6;text-decoration:none;padding:0.25rem 0.5rem;background:#eff6ff;border-radius:4px;">{safe_name}</a>'''
@@ -171,7 +184,7 @@ class ArticleResourceService:
             if not resource_data:
                 # Resource not found - leave as simple text link
                 safe_name = html.escape(name)
-                return f'<a href="{base_url}/api/resources/content/{hash_id}" target="_blank">{safe_name}</a>'
+                return f'<a href="{base_url}/api/r/{hash_id}" target="_blank">{safe_name}</a>'
 
             resource_type = resource_data.get('resource_type', 'unknown')
             return ArticleResourceService._get_resource_embed_html(
@@ -450,14 +463,12 @@ class ArticleResourceService:
         # Action buttons - use history.back() to return to calling page
         action_buttons = ['<button onclick="goBack()" class="back-btn">← Back</button>']
         if pdf_hash_id:
-            action_buttons.append(f'<a href="{base_url}/api/resources/content/{pdf_hash_id}" download class="download-pdf-btn">Download PDF</a>')
+            action_buttons.append(f'<a href="{base_url}/api/r/{pdf_hash_id}" download class="download-pdf-btn">Download PDF</a>')
         actions_html = "\n                    ".join(action_buttons)
 
-        # Content section - use iframe to embed HTML child resource, or fallback to generated content
-        if html_hash_id:
-            content_html = f'<iframe id="article-frame" src="{base_url}/api/resources/content/{html_hash_id}" style="width:100%;border:none;min-height:500px;"></iframe>'
-        else:
-            content_html = html_content
+        # Content section - always render content inline (no nested iframes)
+        # This allows the popup to be embedded in iframes without nesting issues
+        content_html = html_content
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -481,6 +492,9 @@ class ArticleResourceService:
             max-width: 900px;
             margin: 0 auto;
             min-height: 100vh;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
             box-shadow: 0 0 20px rgba(0,0,0,0.1);
         }}
         .modal-header-fixed {{
@@ -560,7 +574,9 @@ class ArticleResourceService:
             background: #2563eb;
         }}
         .modal-body {{
+            flex: 1;
             padding: 1.5rem 2rem 2rem;
+            overflow-y: auto;
         }}
         .modal-meta {{
             display: flex;
@@ -651,6 +667,58 @@ class ArticleResourceService:
             border-radius: 8px;
             margin: 1rem 0;
         }}
+        /* Overlay modal for linked articles */
+        .overlay-modal {{
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }}
+        .overlay-modal.active {{
+            display: flex;
+        }}
+        .overlay-content {{
+            background: white;
+            width: 95%;
+            height: 90%;
+            max-width: 950px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+            display: flex;
+            flex-direction: column;
+        }}
+        .overlay-header {{
+            display: flex;
+            justify-content: flex-end;
+            padding: 0.75rem 1rem;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e5e7eb;
+        }}
+        .overlay-close-btn {{
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }}
+        .overlay-close-btn:hover {{
+            background: #dc2626;
+        }}
+        .overlay-iframe {{
+            flex: 1;
+            width: 100%;
+            border: none;
+        }}
     </style>
 </head>
 <body>
@@ -677,20 +745,75 @@ class ArticleResourceService:
             </div>
         </div>
     </div>
+
+    <!-- Overlay modal for linked articles -->
+    <div id="overlay-modal" class="overlay-modal">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <button class="overlay-close-btn" onclick="closeOverlay()">Close ×</button>
+            </div>
+            <iframe id="overlay-iframe" class="overlay-iframe"></iframe>
+        </div>
+    </div>
+
     <script>
         function goBack() {{
-            // Try to go back in history
             if (window.history.length > 1) {{
                 window.history.back();
             }} else {{
-                // If no history, try to close the window (works if opened via JS)
                 window.close();
-                // If close didn't work, redirect to home
                 setTimeout(function() {{
                     window.location.href = '/';
                 }}, 100);
             }}
         }}
+
+        function openOverlay(url) {{
+            var modal = document.getElementById('overlay-modal');
+            var iframe = document.getElementById('overlay-iframe');
+            iframe.src = url;
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }}
+
+        function closeOverlay() {{
+            var modal = document.getElementById('overlay-modal');
+            var iframe = document.getElementById('overlay-iframe');
+            modal.classList.remove('active');
+            iframe.src = '';
+            document.body.style.overflow = '';
+        }}
+
+        // Close overlay on Escape key
+        document.addEventListener('keydown', function(e) {{
+            if (e.key === 'Escape') {{
+                closeOverlay();
+            }}
+        }});
+
+        // Close overlay when clicking backdrop
+        document.getElementById('overlay-modal').addEventListener('click', function(e) {{
+            if (e.target === this) {{
+                closeOverlay();
+            }}
+        }});
+
+        // Intercept clicks on resource links to open in overlay
+        document.addEventListener('click', function(e) {{
+            var link = e.target.closest('a');
+            if (link && link.href) {{
+                var href = link.href;
+                // Check if it's a resource link (contains /api/r/)
+                if (href.indexOf('/api/r/') !== -1) {{
+                    // Check if it's an HTML resource (not PDF or other downloads)
+                    // PDFs should download normally, HTML should open in overlay
+                    if (!link.hasAttribute('download')) {{
+                        e.preventDefault();
+                        openOverlay(href);
+                    }}
+                }}
+            }}
+        }});
     </script>
 </body>
 </html>"""
@@ -722,8 +845,48 @@ class ArticleResourceService:
         storage = get_storage()
 
         try:
-            # First, delete any existing article resources (for re-publish)
-            ArticleResourceService.delete_article_resources(db, article.id)
+            # Check if we can update existing resources (hash_ids are persisted)
+            # This preserves resource IDs and cross-article links
+            existing_parent = None
+            existing_html = None
+            existing_pdf = None
+
+            if article.popup_hash_id:
+                existing_parent = db.query(Resource).filter(
+                    Resource.hash_id == article.popup_hash_id
+                ).first()
+                # Derive HTML/PDF children from parent via parent_id
+                if existing_parent:
+                    children = db.query(Resource).filter(
+                        Resource.parent_id == existing_parent.id
+                    ).all()
+                    for child in children:
+                        if child.resource_type == ResourceType.HTML:
+                            existing_html = child
+                        elif child.resource_type == ResourceType.PDF:
+                            existing_pdf = child
+
+            # If all existing resources exist, we'll update them in place
+            # Otherwise, delete any partial/old resources and create fresh
+            update_mode = existing_parent and existing_html and existing_pdf
+            if not update_mode:
+                ArticleResourceService.delete_article_resources(db, article.id)
+                # Also clean up any orphan resources that might exist with stored hash_ids
+                for orphan in [existing_parent, existing_html, existing_pdf]:
+                    if orphan:
+                        # Delete file resources first
+                        orphan_file = db.query(FileResource).filter(
+                            FileResource.resource_id == orphan.id
+                        ).first()
+                        if orphan_file:
+                            if orphan_file.file_path:
+                                try:
+                                    storage.delete_file(orphan_file.file_path)
+                                except Exception:
+                                    pass
+                            db.delete(orphan_file)
+                        db.delete(orphan)
+                db.flush()
 
             # Get topic for display
             topic = article.topic or ""
@@ -737,20 +900,35 @@ class ArticleResourceService:
             ).rstrip()
             safe_headline = safe_headline.replace(' ', '_')[:50]
 
-            # 1. Create parent ARTICLE resource first (to get ID for children)
-            parent_resource = Resource(
-                resource_type=ResourceType.ARTICLE,
-                name=article.headline,
-                description=f"Published article: {article.headline}",
-                group_id=None,
-                created_by=editor_user_id,
-                modified_by=editor_user_id,
-                status=ResourceStatus.PUBLISHED,
-                is_active=True,
-                parent_id=None
-            )
-            db.add(parent_resource)
-            db.flush()  # Get parent ID and hash_id
+            # 1. Create or update parent ARTICLE resource
+            if update_mode and existing_parent:
+                # Update existing parent resource
+                parent_resource = existing_parent
+                parent_resource.name = article.headline
+                parent_resource.description = f"Published article: {article.headline}"
+                parent_resource.modified_by = editor_user_id
+                parent_resource.status = ResourceStatus.PUBLISHED
+                parent_resource.is_active = True
+                db.flush()
+            else:
+                # Create new parent resource
+                parent_kwargs = {
+                    "resource_type": ResourceType.ARTICLE,
+                    "name": article.headline,
+                    "description": f"Published article: {article.headline}",
+                    "group_id": None,
+                    "created_by": editor_user_id,
+                    "modified_by": editor_user_id,
+                    "status": ResourceStatus.PUBLISHED,
+                    "is_active": True,
+                    "parent_id": None
+                }
+                if article.popup_hash_id:
+                    parent_kwargs["hash_id"] = article.popup_hash_id
+
+                parent_resource = Resource(**parent_kwargs)
+                db.add(parent_resource)
+                db.flush()  # Get parent ID and hash_id
 
             # 2. Create HTML child resource (for "View as HTML" button)
             html_content = ArticleResourceService._generate_article_html(
@@ -763,29 +941,81 @@ class ArticleResourceService:
                 base_url=base_url
             )
 
-            html_resource = Resource(
-                resource_type=ResourceType.HTML,
-                name=f"{article.headline} - HTML",
-                description="HTML version of published article",
-                group_id=None,
-                created_by=editor_user_id,
-                modified_by=editor_user_id,
-                status=ResourceStatus.PUBLISHED,
-                is_active=True,
-                parent_id=parent_resource.id
-            )
-            db.add(html_resource)
-            db.flush()
+            # Save HTML to file storage
+            html_bytes = html_content.encode('utf-8')
+            html_filename = f"{uuid.uuid4().hex}.html"
+            html_path = f"{date_dir}/{html_filename}"
+            download_html_filename = f"{safe_headline}.html"
 
-            html_text = TextResource(
-                resource_id=html_resource.id,
-                content=html_content,
-                encoding='utf-8',
-                char_count=len(html_content),
-                word_count=len(html_content.split())
-            )
-            db.add(html_text)
-            db.flush()
+            if not storage.save_file_with_metadata(
+                html_path, html_bytes, "text/html",
+                {"article_id": str(article.id), "type": "article_html"}
+            ):
+                raise Exception("Failed to save HTML to storage")
+
+            # 2. Create or update HTML child resource
+            if update_mode and existing_html:
+                # Update existing HTML resource
+                html_resource = existing_html
+                html_resource.name = f"{article.headline} - HTML"
+                html_resource.modified_by = editor_user_id
+                html_resource.parent_id = parent_resource.id
+
+                # Update FileResource - delete old file, update record
+                html_file_resource = db.query(FileResource).filter(
+                    FileResource.resource_id == html_resource.id
+                ).first()
+                if html_file_resource:
+                    # Delete old file
+                    if html_file_resource.file_path:
+                        try:
+                            storage.delete_file(html_file_resource.file_path)
+                        except Exception:
+                            pass
+                    # Update record
+                    html_file_resource.filename = download_html_filename
+                    html_file_resource.file_path = html_path
+                    html_file_resource.file_size = len(html_bytes)
+                    html_file_resource.checksum = hashlib.sha256(html_bytes).hexdigest()
+                else:
+                    html_file_resource = FileResource(
+                        resource_id=html_resource.id,
+                        filename=download_html_filename,
+                        file_path=html_path,
+                        file_size=len(html_bytes),
+                        mime_type="text/html",
+                        checksum=hashlib.sha256(html_bytes).hexdigest()
+                    )
+                    db.add(html_file_resource)
+                db.flush()
+            else:
+                # Create new HTML resource (hash_id auto-generated)
+                html_kwargs = {
+                    "resource_type": ResourceType.HTML,
+                    "name": f"{article.headline} - HTML",
+                    "description": "HTML version of published article",
+                    "group_id": None,
+                    "created_by": editor_user_id,
+                    "modified_by": editor_user_id,
+                    "status": ResourceStatus.PUBLISHED,
+                    "is_active": True,
+                    "parent_id": parent_resource.id
+                }
+
+                html_resource = Resource(**html_kwargs)
+                db.add(html_resource)
+                db.flush()
+
+                html_file_resource = FileResource(
+                    resource_id=html_resource.id,
+                    filename=download_html_filename,
+                    file_path=html_path,
+                    file_size=len(html_bytes),
+                    mime_type="text/html",
+                    checksum=hashlib.sha256(html_bytes).hexdigest()
+                )
+                db.add(html_file_resource)
+                db.flush()
 
             # 3. Create PDF child resource
             pdf_buffer = PDFService.generate_article_pdf(
@@ -812,32 +1042,76 @@ class ArticleResourceService:
             ):
                 raise Exception("Failed to save PDF to storage")
 
-            pdf_resource = Resource(
-                resource_type=ResourceType.PDF,
-                name=f"{article.headline} - PDF",
-                description="PDF version of published article",
-                group_id=None,
-                created_by=editor_user_id,
-                modified_by=editor_user_id,
-                status=ResourceStatus.PUBLISHED,
-                is_active=True,
-                parent_id=parent_resource.id
-            )
-            db.add(pdf_resource)
-            db.flush()
+            # 3. Create or update PDF child resource
+            if update_mode and existing_pdf:
+                # Update existing PDF resource
+                pdf_resource = existing_pdf
+                pdf_resource.name = f"{article.headline} - PDF"
+                pdf_resource.modified_by = editor_user_id
+                pdf_resource.parent_id = parent_resource.id
 
-            pdf_file_resource = FileResource(
-                resource_id=pdf_resource.id,
-                filename=download_filename,
-                file_path=pdf_path,
-                file_size=len(pdf_bytes),
-                mime_type="application/pdf",
-                checksum=hashlib.sha256(pdf_bytes).hexdigest()
-            )
-            db.add(pdf_file_resource)
-            db.flush()
+                # Update FileResource - delete old file, update record
+                pdf_file_resource = db.query(FileResource).filter(
+                    FileResource.resource_id == pdf_resource.id
+                ).first()
+                if pdf_file_resource:
+                    # Delete old file
+                    if pdf_file_resource.file_path:
+                        try:
+                            storage.delete_file(pdf_file_resource.file_path)
+                        except Exception:
+                            pass
+                    # Update record
+                    pdf_file_resource.filename = download_filename
+                    pdf_file_resource.file_path = pdf_path
+                    pdf_file_resource.file_size = len(pdf_bytes)
+                    pdf_file_resource.checksum = hashlib.sha256(pdf_bytes).hexdigest()
+                else:
+                    pdf_file_resource = FileResource(
+                        resource_id=pdf_resource.id,
+                        filename=download_filename,
+                        file_path=pdf_path,
+                        file_size=len(pdf_bytes),
+                        mime_type="application/pdf",
+                        checksum=hashlib.sha256(pdf_bytes).hexdigest()
+                    )
+                    db.add(pdf_file_resource)
+                db.flush()
+            else:
+                # Create new PDF resource (hash_id auto-generated)
+                pdf_kwargs = {
+                    "resource_type": ResourceType.PDF,
+                    "name": f"{article.headline} - PDF",
+                    "description": "PDF version of published article",
+                    "group_id": None,
+                    "created_by": editor_user_id,
+                    "modified_by": editor_user_id,
+                    "status": ResourceStatus.PUBLISHED,
+                    "is_active": True,
+                    "parent_id": parent_resource.id
+                }
+
+                pdf_resource = Resource(**pdf_kwargs)
+                db.add(pdf_resource)
+                db.flush()
+
+                pdf_file_resource = FileResource(
+                    resource_id=pdf_resource.id,
+                    filename=download_filename,
+                    file_path=pdf_path,
+                    file_size=len(pdf_bytes),
+                    mime_type="application/pdf",
+                    checksum=hashlib.sha256(pdf_bytes).hexdigest()
+                )
+                db.add(pdf_file_resource)
+                db.flush()
 
             # 4. Generate popup HTML with references to child resources
+            logger.info(
+                f"Generating popup HTML for article {article.id}: "
+                f"html_hash_id={html_resource.hash_id}, pdf_hash_id={pdf_resource.hash_id}, "
+                f"base_url='{base_url}'"
+            )
             popup_html = ArticleResourceService._generate_article_popup_html(
                 article_id=article.id,
                 headline=article.headline,
@@ -867,29 +1141,78 @@ class ArticleResourceService:
             ):
                 raise Exception("Failed to save popup HTML to storage")
 
-            # 6. Add FileResource to parent ARTICLE resource
-            parent_file_resource = FileResource(
-                resource_id=parent_resource.id,
-                filename=f"{safe_headline}.html",
-                file_path=popup_path,
-                file_size=len(popup_bytes),
-                mime_type="text/html",
-                checksum=hashlib.sha256(popup_bytes).hexdigest()
-            )
-            db.add(parent_file_resource)
-
-            # 7. Link parent resource to article
-            db.execute(
-                article_resources.insert().values(
-                    article_id=article.id,
-                    resource_id=parent_resource.id
+            # 6. Add or update FileResource for parent ARTICLE resource
+            if update_mode and existing_parent:
+                # Update existing FileResource
+                parent_file_resource = db.query(FileResource).filter(
+                    FileResource.resource_id == parent_resource.id
+                ).first()
+                if parent_file_resource:
+                    # Delete old file
+                    if parent_file_resource.file_path:
+                        try:
+                            storage.delete_file(parent_file_resource.file_path)
+                        except Exception:
+                            pass
+                    # Update record
+                    parent_file_resource.filename = f"{safe_headline}.html"
+                    parent_file_resource.file_path = popup_path
+                    parent_file_resource.file_size = len(popup_bytes)
+                    parent_file_resource.checksum = hashlib.sha256(popup_bytes).hexdigest()
+                else:
+                    parent_file_resource = FileResource(
+                        resource_id=parent_resource.id,
+                        filename=f"{safe_headline}.html",
+                        file_path=popup_path,
+                        file_size=len(popup_bytes),
+                        mime_type="text/html",
+                        checksum=hashlib.sha256(popup_bytes).hexdigest()
+                    )
+                    db.add(parent_file_resource)
+            else:
+                parent_file_resource = FileResource(
+                    resource_id=parent_resource.id,
+                    filename=f"{safe_headline}.html",
+                    file_path=popup_path,
+                    file_size=len(popup_bytes),
+                    mime_type="text/html",
+                    checksum=hashlib.sha256(popup_bytes).hexdigest()
                 )
-            )
+                db.add(parent_file_resource)
+
+            # 7. Link parent resource to article (only if not already linked)
+            existing_link = db.execute(
+                article_resources.select().where(
+                    and_(
+                        article_resources.c.article_id == article.id,
+                        article_resources.c.resource_id == parent_resource.id
+                    )
+                )
+            ).first()
+
+            if not existing_link:
+                logger.info(
+                    f"Linking parent resource {parent_resource.id} to article {article.id}"
+                )
+                db.execute(
+                    article_resources.insert().values(
+                        article_id=article.id,
+                        resource_id=parent_resource.id
+                    )
+                )
 
             db.commit()
+            logger.info(f"Successfully committed all resources for article {article.id}")
             db.refresh(parent_resource)
             db.refresh(html_resource)
             db.refresh(pdf_resource)
+
+            # Save popup_hash_id to article metadata for persistence across re-publishes
+            # HTML and PDF hash_ids are derived from parent via parent_id relationship
+            if not article.popup_hash_id:
+                article.popup_hash_id = parent_resource.hash_id
+                db.commit()
+                logger.info(f"Saved popup_hash_id to article {article.id}: {article.popup_hash_id}")
 
             logger.info(
                 f"Created article resources for article {article.id}: "
@@ -908,10 +1231,11 @@ class ArticleResourceService:
     @staticmethod
     def delete_article_resources(db: Session, article_id: int) -> int:
         """
-        Delete all ARTICLE resources and their children for an article.
+        Delete the article's OWN publication resources (not cross-article links).
 
-        Uses cascade delete via parent_id relationship, but we handle
-        file cleanup manually for PDF resources.
+        Only deletes ARTICLE type resources where the resource's hash_id matches
+        the article's stored popup_hash_id. Cross-article links (other articles'
+        resources linked via resource editor) are preserved.
 
         Args:
             db: Database session
@@ -922,6 +1246,11 @@ class ArticleResourceService:
         """
         storage = get_storage()
         deleted_count = 0
+
+        # Get the article to check its own publication hash_ids
+        article = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+        if not article:
+            return 0
 
         # Find all ARTICLE type resources linked to this article
         article_resource_links = db.execute(
@@ -935,35 +1264,72 @@ class ArticleResourceService:
             resource = db.query(Resource).filter(Resource.id == resource_id).first()
 
             if resource and resource.resource_type == ResourceType.ARTICLE:
+                # IMPORTANT: Only delete resources that are the article's OWN publication
+                # resources, not cross-article links from the resource editor.
+                # Cross-article links have different hash_ids than the article's stored ones.
+                #
+                # Logic:
+                # - If article has popup_hash_id stored, only delete if it matches
+                # - If article has no popup_hash_id, check if this resource belongs to another
+                #   article (by checking all articles' popup_hash_ids)
+                is_own_resource = False
+                if article.popup_hash_id:
+                    is_own_resource = (resource.hash_id == article.popup_hash_id)
+                else:
+                    # No stored popup_hash_id - this article hasn't been published yet.
+                    # Check if this resource belongs to another article (cross-article link).
+                    other_article = db.query(ContentArticle).filter(
+                        ContentArticle.popup_hash_id == resource.hash_id,
+                        ContentArticle.id != article_id
+                    ).first()
+                    if other_article:
+                        # This resource belongs to another article - don't delete
+                        is_own_resource = False
+                    else:
+                        # Resource doesn't belong to any article - could be orphan or legacy
+                        # We'll delete it as part of cleanup
+                        is_own_resource = True
+
+                if not is_own_resource:
+                    logger.debug(
+                        f"Preserving cross-article link: article {article_id} -> "
+                        f"resource {resource.hash_id} (article's popup_hash_id={article.popup_hash_id})"
+                    )
+                    continue
                 # Clean up the popup HTML file for the ARTICLE resource
                 article_file = db.query(FileResource).filter(
                     FileResource.resource_id == resource.id
                 ).first()
-                if article_file and article_file.file_path:
-                    try:
-                        storage.delete_file(article_file.file_path)
-                        logger.debug(f"Deleted article popup HTML: {article_file.file_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to delete article popup HTML: {e}")
+                if article_file:
+                    if article_file.file_path:
+                        try:
+                            storage.delete_file(article_file.file_path)
+                            logger.debug(f"Deleted article popup HTML: {article_file.file_path}")
+                        except Exception as e:
+                            logger.warning(f"Failed to delete article popup HTML: {e}")
+                    db.delete(article_file)
 
-                # Get children first (for file cleanup before cascade delete)
+                # Get children first (for file cleanup before delete)
                 children = db.query(Resource).filter(
                     Resource.parent_id == resource.id
                 ).all()
 
                 for child in children:
-                    # Clean up files for PDF children
-                    if child.resource_type == ResourceType.PDF:
-                        file_resource = db.query(FileResource).filter(
-                            FileResource.resource_id == child.id
-                        ).first()
-                        if file_resource and file_resource.file_path:
+                    # Clean up files for file-based children (PDF, HTML)
+                    file_resource = db.query(FileResource).filter(
+                        FileResource.resource_id == child.id
+                    ).first()
+                    if file_resource:
+                        if file_resource.file_path:
                             try:
                                 storage.delete_file(file_resource.file_path)
-                                logger.debug(f"Deleted PDF file: {file_resource.file_path}")
+                                logger.debug(f"Deleted file: {file_resource.file_path}")
                             except Exception as e:
-                                logger.warning(f"Failed to delete PDF file: {e}")
+                                logger.warning(f"Failed to delete file: {e}")
+                        db.delete(file_resource)
 
+                    # Explicitly delete child resource (don't rely on CASCADE)
+                    db.delete(child)
                     deleted_count += 1
 
                 # Remove the article_resources link first
@@ -994,6 +1360,10 @@ class ArticleResourceService:
         """
         Get publication resource hash_ids for an article.
 
+        Only returns the article's OWN publication resources (not cross-article links).
+        Uses the stored popup_hash_id on the article, then derives HTML/PDF children
+        from the parent resource via parent_id relationship.
+
         Args:
             db: Database session
             article_id: ContentArticle ID
@@ -1006,33 +1376,29 @@ class ArticleResourceService:
         """
         result = {"popup": None, "html": None, "pdf": None}
 
-        # Find ARTICLE resources for this article
-        links = db.execute(
-            article_resources.select().where(
-                article_resources.c.article_id == article_id
-            )
-        ).fetchall()
+        # Get the article to check its stored popup_hash_id
+        article = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+        if not article or not article.popup_hash_id:
+            return result
 
-        for link in links:
-            parent = db.query(Resource).filter(
-                Resource.id == link.resource_id,
-                Resource.resource_type == ResourceType.ARTICLE,
+        # Get popup from stored hash_id (authoritative source)
+        result["popup"] = article.popup_hash_id
+
+        # Derive HTML/PDF from parent's children via parent_id relationship
+        popup_resource = db.query(Resource).filter(
+            Resource.hash_id == article.popup_hash_id
+        ).first()
+
+        if popup_resource:
+            children = db.query(Resource).filter(
+                Resource.parent_id == popup_resource.id,
                 Resource.is_active == True
-            ).first()
+            ).all()
 
-            if parent:
-                result["popup"] = parent.hash_id
-
-                # Get children
-                children = db.query(Resource).filter(
-                    Resource.parent_id == parent.id,
-                    Resource.is_active == True
-                ).all()
-
-                for child in children:
-                    if child.resource_type == ResourceType.HTML:
-                        result["html"] = child.hash_id
-                    elif child.resource_type == ResourceType.PDF:
-                        result["pdf"] = child.hash_id
+            for child in children:
+                if child.resource_type == ResourceType.HTML:
+                    result["html"] = child.hash_id
+                elif child.resource_type == ResourceType.PDF:
+                    result["pdf"] = child.hash_id
 
         return result

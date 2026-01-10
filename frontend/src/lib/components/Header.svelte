@@ -1,6 +1,6 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getUserProfile, deleteUserAccount, getTopics, type Topic as TopicType } from '$lib/api';
+    import { getUserProfile, deleteUserAccount, getEntitledTopics, type Topic as TopicType } from '$lib/api';
     import { goto } from '$app/navigation';
     import { page } from '$app/stores';
     import { onMount } from 'svelte';
@@ -31,7 +31,9 @@
         if (topicsLoading) return; // Prevent concurrent loads
         try {
             topicsLoading = true;
-            dbTopics = await getTopics(true, true); // active_only, visible_only
+            // Use entitled topics API - returns only topics user can access as reader
+            // Backend filters by: active=true, visible=true, and user has explicit reader entitlement
+            dbTopics = await getEntitledTopics('reader');
             topicsLoadedForUser = $auth.user?.email || 'authenticated';
         } catch (e) {
             console.error('Error loading topics:', e);

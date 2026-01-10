@@ -70,6 +70,7 @@ class AnalystAgent:
         query: str,
         user_context: UserContext,
         article_id: Optional[int] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         Full research and article creation workflow.
@@ -85,6 +86,7 @@ class AnalystAgent:
             query: Research query from user
             user_context: User context for permissions
             article_id: Optional existing article to update
+            conversation_history: Optional list of previous messages for context
 
         Returns:
             Dict with article_id, resources_created, and content preview
@@ -131,6 +133,7 @@ class AnalystAgent:
             web_results=web_results.get("results", []),
             data_results=data_results,
             user_context=user_context,
+            conversation_history=conversation_history,
         )
 
         # Step 6: Create or update article
@@ -142,16 +145,20 @@ class AnalystAgent:
                 user_context=user_context,
             )
             headline = None  # Keep existing headline
+            keywords = None  # Keep existing keywords
         else:
             # Generate headline
             headline = self._generate_headline(query)
+
+            # Generate keywords from headline and content
+            keywords = self._generate_keywords(headline, content)
 
             # Create new draft article
             create_result = self.article_agent.create_draft_article(
                 headline=headline,
                 user_context=user_context,
                 topic=self.topic,
-                keywords=query,
+                keywords=keywords,
             )
 
             if not create_result.get("success"):
@@ -182,6 +189,7 @@ class AnalystAgent:
             "success": True,
             "article_id": article_id,
             "headline": headline,
+            "keywords": keywords,
             "topic": self.topic,
             "content": content,
             "linked_resources": linked_resources,
@@ -338,6 +346,7 @@ class AnalystAgent:
         web_results: List[Dict],
         data_results: List[Dict],
         user_context: Optional[UserContext] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """
         Synthesize research findings into article content.
@@ -349,12 +358,22 @@ class AnalystAgent:
             web_results: Web search results
             data_results: Downloaded financial data
             user_context: User context containing tonality preferences
+            conversation_history: Previous conversation messages for context
 
         Returns:
             Synthesized article content in markdown
         """
         # Build context for LLM
         context_parts = []
+
+        # Include conversation history for context
+        if conversation_history:
+            context_parts.append("## Conversation Context\n")
+            for msg in conversation_history[-5:]:  # Last 5 messages
+                role = msg.get("role", "user")
+                content = msg.get("content", "")[:200]  # Truncate long messages
+                context_parts.append(f"- **{role}**: {content}")
+            context_parts.append("")
 
         if articles:
             context_parts.append("## Existing Research\n")
@@ -461,6 +480,31 @@ Further analysis is recommended based on the available data.
         except Exception:
             # Fallback headline
             return f"Analysis: {query[:80]}"
+
+    def _generate_keywords(self, headline: str, content: str) -> str:
+        """
+        Generate comma-separated keywords from article headline and content.
+
+        Args:
+            headline: Article headline
+            content: Article content
+
+        Returns:
+            Comma-separated keywords string
+        """
+        try:
+            # Use first 1500 chars of content for keyword extraction
+            content_excerpt = content[:1500] if len(content) > 1500 else content
+
+            response = self.llm.invoke([
+                SystemMessage(content="Extract 5-8 relevant keywords from the article content. Return only comma-separated keywords, no explanation."),
+                HumanMessage(content=f"Article headline: {headline}\n\nContent excerpt: {content_excerpt}\n\nKeywords:"),
+            ])
+            keywords = response.content.strip()
+            return keywords
+        except Exception:
+            # Fallback to topic if keyword generation fails
+            return self.topic
 
     def process(self, state: AgentState) -> AgentState:
         """

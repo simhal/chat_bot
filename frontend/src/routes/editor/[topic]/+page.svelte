@@ -1,7 +1,7 @@
 <script lang="ts">
     import { page } from '$app/stores';
     import { auth } from '$lib/stores/auth';
-    import { getEditorArticles, rejectArticle, publishArticle, downloadArticlePDF, getTopics, type Topic as TopicType } from '$lib/api';
+    import { getEditorArticles, rejectArticle, publishArticle, downloadArticlePDF, getEntitledTopics, type Topic as TopicType } from '$lib/api';
     import { onMount, onDestroy } from 'svelte';
     import { goto } from '$app/navigation';
     import Markdown from '$lib/components/Markdown.svelte';
@@ -43,22 +43,11 @@
     // Topics loaded from database
     let dbTopics: TopicType[] = [];
 
-    // Get user scopes reactively
-    $: userScopes = $auth.user?.scopes || [];
+    // Accessible topics - backend filters by editor entitlements, sorted by order
+    $: accessibleTopics = dbTopics.sort((a, b) => a.sort_order - b.sort_order);
 
-    // Check if user has editor access to a specific topic
-    function hasEditorAccess(topic: string, scopes: string[]): boolean {
-        if (!scopes.length) return false;
-        // Global admin can access all topics
-        if (scopes.includes('global:admin')) return true;
-        // Or users with explicit editor role for that topic
-        return scopes.includes(`${topic}:editor`);
-    }
-
-    // Filter topics to only show ones where user has editor access
-    $: accessibleTopics = dbTopics
-        .filter(topic => hasEditorAccess(topic.slug, userScopes))
-        .sort((a, b) => a.sort_order - b.sort_order);
+    // Check if current topic is in accessible list
+    $: canAccessCurrentTopic = accessibleTopics.some(t => t.slug === currentTopic);
 
     // Get topic from URL parameter
     $: currentTopic = $page.params.topic;
@@ -78,14 +67,15 @@
     }
 
     // Redirect if user doesn't have permission for current topic
-    $: if ($auth.isAuthenticated && currentTopic && !topicsLoading && !hasEditorAccess(currentTopic, userScopes)) {
+    $: if ($auth.isAuthenticated && currentTopic && !topicsLoading && !canAccessCurrentTopic) {
         goto('/editor');
     }
 
     async function loadTopicsFromDb() {
         try {
             topicsLoading = true;
-            dbTopics = await getTopics(); // Show all topics in role dropdown
+            // Use entitled topics API - backend filters by editor entitlements
+            dbTopics = await getEntitledTopics('editor');
         } catch (e) {
             console.error('Error loading topics:', e);
             dbTopics = [];
@@ -247,6 +237,25 @@
         return { success: false, action: 'select_article', error: `Article #${articleId} not found in current topic` };
     }
 
+    // Notification handlers - article status changed via chat command
+    async function handleArticlePublishedAction(action: UIAction): Promise<ActionResult> {
+        await loadArticles();
+        if (selectedArticle) {
+            selectedArticle = null;
+            navigationContext.clearArticle();
+        }
+        return { success: true, action: 'article_published', message: 'Article list refreshed' };
+    }
+
+    async function handleArticleRejectedAction(action: UIAction): Promise<ActionResult> {
+        await loadArticles();
+        if (selectedArticle) {
+            selectedArticle = null;
+            navigationContext.clearArticle();
+        }
+        return { success: true, action: 'article_rejected', message: 'Article list refreshed' };
+    }
+
     onMount(async () => {
         if (!$auth.isAuthenticated) {
             goto('/');
@@ -259,6 +268,8 @@
             actionStore.registerHandler('view_article', handleViewArticleAction),
             actionStore.registerHandler('publish_article', handlePublishArticleAction),
             actionStore.registerHandler('reject_article', handleRejectArticleAction),
+            actionStore.registerHandler('article_published', handleArticlePublishedAction),
+            actionStore.registerHandler('article_rejected', handleArticleRejectedAction),
             actionStore.registerHandler('select_topic', handleSelectTopicAction),
             actionStore.registerHandler('download_pdf', handleDownloadPdfAction),
             actionStore.registerHandler('close_modal', handleCloseModalAction),

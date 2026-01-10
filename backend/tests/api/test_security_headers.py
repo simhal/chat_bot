@@ -213,3 +213,48 @@ class TestSecurityHeadersComprehensive:
         assert response.headers.get("X-Frame-Options") == "DENY"
         assert response.headers.get("X-Content-Type-Options") == "nosniff"
         assert response.headers.get("Content-Security-Policy") is not None
+
+
+class TestEmbeddableResourceHeaders:
+    """Test security headers for embeddable resource endpoints (/api/r/)."""
+
+    def test_public_resource_allows_same_origin_framing(self, client: TestClient):
+        """Test that /api/r/ endpoints allow framing for iframe embedding."""
+        # Even for 404, headers should be set correctly
+        response = client.get("/api/r/test-hash-id")
+
+        # X-Frame-Options is removed for embeddable resources - we rely on CSP frame-ancestors
+        # which supports multiple origins (X-Frame-Options doesn't)
+        assert response.headers.get("X-Frame-Options") is None
+
+    def test_public_resource_csp_allows_framing(self, client: TestClient):
+        """Test that /api/r/ endpoints have CSP that allows framing from self and configured origins."""
+        response = client.get("/api/r/test-hash-id")
+
+        csp = response.headers.get("Content-Security-Policy")
+        assert csp is not None
+        # Should allow framing from self (and potentially other configured origins)
+        assert "'self'" in csp
+        assert "frame-ancestors" in csp
+        # Should NOT have frame-ancestors 'none' (which would block all framing)
+        assert "frame-ancestors 'none'" not in csp
+
+    def test_public_resource_still_has_other_security_headers(self, client: TestClient):
+        """Test that /api/r/ endpoints still have other security headers."""
+        response = client.get("/api/r/test-hash-id")
+
+        # These should still be present
+        assert response.headers.get("X-Content-Type-Options") == "nosniff"
+        assert response.headers.get("X-XSS-Protection") == "1; mode=block"
+        assert response.headers.get("Strict-Transport-Security") is not None
+        assert response.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+        assert response.headers.get("Permissions-Policy") is not None
+
+    def test_non_resource_endpoint_still_denies_framing(self, client: TestClient):
+        """Test that other API endpoints still deny framing."""
+        response = client.get("/health")
+
+        # Regular endpoints should deny framing
+        assert response.headers.get("X-Frame-Options") == "DENY"
+        csp = response.headers.get("Content-Security-Policy")
+        assert "frame-ancestors 'none'" in csp

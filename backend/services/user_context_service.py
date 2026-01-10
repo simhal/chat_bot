@@ -17,7 +17,7 @@ class UserContextService:
 
     Provides methods to construct UserContext from:
     - JWT payload + database lookup
-    - User ID (for Celery tasks)
+    - User ID (for background tasks)
     - Raw dictionaries
     """
 
@@ -101,7 +101,7 @@ class UserContextService:
     @staticmethod
     def build_from_id(user_id: int, db: Session) -> UserContext:
         """
-        Build UserContext from user ID (for Celery tasks).
+        Build UserContext from user ID (for background tasks).
 
         Args:
             user_id: Database user ID

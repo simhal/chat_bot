@@ -280,3 +280,156 @@ class TestTopicGroupsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
+
+
+class TestEntitledTopicsEndpoint:
+    """Test /api/topics/entitled endpoint."""
+
+    def test_entitled_topics_no_auth(self, client: TestClient, mock_redis):
+        """Test GET /api/topics/entitled without authentication."""
+        response = client.get("/api/topics/entitled")
+        assert response.status_code == 401
+
+    def test_entitled_topics_reader_role(
+        self, client: TestClient, auth_headers, test_topic, mock_redis
+    ):
+        """Test GET /api/topics/entitled with reader role."""
+        response = client.get(
+            "/api/topics/entitled",
+            params={"role": "reader"},
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+
+    def test_entitled_topics_analyst_role(
+        self, client: TestClient, analyst_headers, test_topic, mock_redis
+    ):
+        """Test GET /api/topics/entitled with analyst role."""
+        response = client.get(
+            "/api/topics/entitled",
+            params={"role": "analyst"},
+            headers=analyst_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        # Analyst should have access to at least the test topic
+        topic_slugs = [t["slug"] for t in data]
+        assert test_topic.slug in topic_slugs
+
+    def test_entitled_topics_editor_role(
+        self, client: TestClient, editor_headers, test_topic, mock_redis
+    ):
+        """Test GET /api/topics/entitled with editor role."""
+        response = client.get(
+            "/api/topics/entitled",
+            params={"role": "editor"},
+            headers=editor_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        # Editor should have access to at least the test topic
+        topic_slugs = [t["slug"] for t in data]
+        assert test_topic.slug in topic_slugs
+
+    def test_entitled_topics_admin_role(
+        self, client: TestClient, admin_headers, test_topic, mock_redis
+    ):
+        """Test GET /api/topics/entitled with admin role returns all topics."""
+        response = client.get(
+            "/api/topics/entitled",
+            params={"role": "admin"},
+            headers=admin_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        # Global admin should have access to all topics
+        assert len(data) >= 1
+
+    def test_entitled_topics_invalid_role(
+        self, client: TestClient, auth_headers, mock_redis
+    ):
+        """Test GET /api/topics/entitled with invalid role parameter."""
+        response = client.get(
+            "/api/topics/entitled",
+            params={"role": "invalid_role"},
+            headers=auth_headers
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert "Invalid role" in data["detail"]
+
+    def test_entitled_topics_default_role(
+        self, client: TestClient, auth_headers, mock_redis
+    ):
+        """Test GET /api/topics/entitled with default role (reader)."""
+        response = client.get(
+            "/api/topics/entitled",
+            headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+
+
+class TestGlobalTopicProtection:
+    """Test global topic deletion protection."""
+
+    def test_cannot_delete_global_topic(
+        self, client: TestClient, admin_headers, db_session, mock_redis
+    ):
+        """Test that the global topic cannot be deleted."""
+        # First create the global topic if it doesn't exist
+        global_topic = db_session.query(Topic).filter(Topic.slug == "global").first()
+        if not global_topic:
+            global_topic = Topic(
+                slug="global",
+                title="Global",
+                description="System-wide content",
+                visible=True,
+                active=True
+            )
+            db_session.add(global_topic)
+            db_session.commit()
+
+        # Try to delete global topic
+        response = client.delete(
+            "/api/topics/global",
+            headers=admin_headers
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert "global" in data["detail"].lower()
+        assert "cannot be deleted" in data["detail"].lower()
+
+        # Verify global topic still exists
+        global_topic = db_session.query(Topic).filter(Topic.slug == "global").first()
+        assert global_topic is not None
+
+    def test_can_delete_non_global_topic(
+        self, client: TestClient, admin_headers, db_session, mock_redis
+    ):
+        """Test that regular topics can still be deleted."""
+        # Create a topic to delete
+        topic = Topic(
+            slug="deletable_topic",
+            title="Deletable",
+            visible=True,
+            active=True
+        )
+        db_session.add(topic)
+        db_session.commit()
+
+        response = client.delete(
+            "/api/topics/deletable_topic",
+            headers=admin_headers
+        )
+        assert response.status_code == 200
+
+        # Verify deletion
+        deleted = db_session.query(Topic).filter(Topic.slug == "deletable_topic").first()
+        assert deleted is None

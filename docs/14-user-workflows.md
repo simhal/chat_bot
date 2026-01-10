@@ -420,15 +420,14 @@ The chat can trigger UI actions based on natural language:
 | "Show articles for review" | Opens editor queue |
 | "Publish this article" | Initiates HITL publish workflow |
 
-### 8.6 Background Tasks
+### 8.6 Processing
 
-Complex requests may run as background tasks:
+Complex requests run synchronously:
 
 1. Request complex research or analysis
-2. Task queued to Celery worker
+2. Task processed by LangGraph workflow
 3. Progress indicator shows in UI
 4. Results return when complete
-5. Can continue chatting while waiting
 
 ### 8.7 Conversation Memory
 

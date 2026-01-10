@@ -8,7 +8,7 @@ This agent handles the editorial review and publishing workflow:
 - Process approval callbacks
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -48,6 +48,7 @@ class EditorSubAgent:
         self,
         article_id: int,
         user_context: UserContext,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         Review an article and provide feedback.
@@ -55,6 +56,7 @@ class EditorSubAgent:
         Args:
             article_id: ID of the article to review
             user_context: User context for permission checking
+            conversation_history: Optional previous messages for context
 
         Returns:
             Dict with article details and AI-generated review
@@ -96,7 +98,7 @@ class EditorSubAgent:
         content = VectorService.get_article_content(article_id)
 
         # Generate AI review
-        review = self._generate_review(article.headline, content)
+        review = self._generate_review(article.headline, content, conversation_history)
 
         return {
             "success": True,
@@ -112,13 +114,19 @@ class EditorSubAgent:
             "ai_review": review,
         }
 
-    def _generate_review(self, headline: str, content: str) -> Dict[str, Any]:
+    def _generate_review(
+        self,
+        headline: str,
+        content: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
         """
         Generate an AI-powered review of the article.
 
         Args:
             headline: Article headline
             content: Article content
+            conversation_history: Previous messages for context
 
         Returns:
             Dict with review findings
@@ -126,7 +134,17 @@ class EditorSubAgent:
         try:
             from langchain_core.messages import SystemMessage, HumanMessage
 
-            prompt = f"""Review this financial research article for quality and accuracy.
+            # Build context from conversation history
+            context_section = ""
+            if conversation_history:
+                context_parts = ["## Editor's Conversation Context\n"]
+                for msg in conversation_history[-5:]:
+                    role = msg.get("role", "user")
+                    msg_content = msg.get("content", "")[:200]
+                    context_parts.append(f"- **{role}**: {msg_content}")
+                context_section = "\n".join(context_parts) + "\n\n"
+
+            prompt = f"""{context_section}Review this financial research article for quality and accuracy.
 
 Headline: {headline}
 

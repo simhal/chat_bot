@@ -475,7 +475,8 @@ def mock_redis():
     """Mock Redis client and TokenCache for tests."""
     with patch("redis_client.get_redis_client") as mock_client, \
          patch("redis_client.TokenCache") as mock_cache, \
-         patch("auth.TokenCache") as mock_auth_cache:
+         patch("auth.TokenCache") as mock_auth_cache, \
+         patch("services.content_cache._get_cache") as mock_content_cache:
 
         # Mock Redis client
         redis_mock = MagicMock()
@@ -484,6 +485,9 @@ def mock_redis():
         redis_mock.delete.return_value = True
         redis_mock.exists.return_value = False
         mock_client.return_value = redis_mock
+
+        # Disable content caching by returning None
+        mock_content_cache.return_value = None
 
         # Mock TokenCache methods to return valid data for test tokens
         def mock_get_access_token(token_id):

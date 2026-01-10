@@ -408,6 +408,11 @@ class ContentArticle(Base):
     # Active status (can be deactivated by admin)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
 
+    # Publication resource hash_id - persists across republish cycles
+    # Generated on first publish and reused on subsequent publishes
+    # HTML and PDF children are derived from parent via parent_id relationship
+    popup_hash_id = Column(String(64), nullable=True, index=True)
+
     # Relationship to Topic
     topic_ref = relationship('Topic', back_populates='articles')
 

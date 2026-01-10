@@ -100,47 +100,79 @@
 
 	/**
 	 * Handle HITL confirmation - user clicked Confirm button.
-	 * Sends a message to the chatbot to execute the confirmed action.
+	 * Calls the API endpoint specified in the confirmation object.
 	 */
 	async function handleConfirm() {
-		if (!pendingConfirmation) return;
-
-		const confirmation = pendingConfirmation;
-		pendingConfirmation = null;  // Clear the prompt immediately
-
-		// Build a confirmation message for the chatbot
-		let confirmMessage = '';
-		if (confirmation.type === 'publish_approval' && confirmation.article_id) {
-			confirmMessage = `Yes, publish article #${confirmation.article_id}`;
-		} else {
-			confirmMessage = `Confirm: ${confirmation.title}`;
+		console.log('🔘 handleConfirm called, pendingConfirmation:', pendingConfirmation);
+		if (!pendingConfirmation) {
+			console.warn('⚠️ handleConfirm called but no pendingConfirmation');
+			return;
 		}
 
+		const confirmation = pendingConfirmation;
+		console.log('📋 Confirmation details:', {
+			id: confirmation.id,
+			type: confirmation.type,
+			endpoint: confirmation.confirm_endpoint,
+			method: confirmation.confirm_method,
+			body: confirmation.confirm_body
+		});
+		pendingConfirmation = null;  // Clear the prompt immediately
+		confirmationProcessing = true;
+
 		// Add user's confirmation as a message
+		const confirmMessage = confirmation.type === 'publish_approval' && confirmation.article_id
+			? `Confirmed: Publish article #${confirmation.article_id}`
+			: `Confirmed: ${confirmation.title}`;
 		messages = [...messages, { role: 'user', content: confirmMessage }];
 		loading = true;
 		error = '';
 
 		try {
-			const navContext = getNavigationContextForAPI($navigationContext);
-			// Include the confirmation ID so the backend knows this is a confirmed action
-			const response = await sendChatMessage(confirmMessage, navContext);
+			// Call the API endpoint specified in the confirmation
+			if (confirmation.confirm_endpoint) {
+				console.log('📤 Calling confirmation endpoint:', confirmation.confirm_endpoint);
+				console.log('📤 Request options:', {
+					method: confirmation.confirm_method || 'POST',
+					hasBody: !!confirmation.confirm_body,
+					body: confirmation.confirm_body
+				});
+				const result = await apiRequest(confirmation.confirm_endpoint, {
+					method: confirmation.confirm_method || 'POST',
+					body: confirmation.confirm_body ? JSON.stringify(confirmation.confirm_body) : undefined
+				});
 
-			console.log('✅ Confirmation response:', response);
-			messages = [...messages, { role: 'assistant', content: response.response }];
+				console.log('✅ Confirmation API response:', result);
 
-			// Handle any follow-up UI actions or navigation
-			if (response.ui_action) {
-				await executeUIAction(response.ui_action);
-			}
-			if (response.navigation) {
-				await executeNavigation(response.navigation);
+				// Show success message
+				const successMessage = result.message || `${confirmation.title} completed successfully!`;
+				messages = [...messages, { role: 'assistant', content: successMessage }];
+			} else {
+				// Fallback: send as chat message if no endpoint specified
+				const navContext = getNavigationContextForAPI($navigationContext);
+				const response = await sendChatMessage(confirmMessage, navContext);
+				console.log('✅ Confirmation response:', response);
+				messages = [...messages, { role: 'assistant', content: response.response }];
+
+				if (response.ui_action) {
+					await executeUIAction(response.ui_action);
+				}
+				if (response.navigation) {
+					await executeNavigation(response.navigation);
+				}
 			}
 		} catch (e) {
-			console.error('Confirmation failed:', e);
+			console.error('❌ Confirmation failed:', e);
+			console.error('❌ Error details:', {
+				name: e instanceof Error ? e.name : 'Unknown',
+				message: e instanceof Error ? e.message : String(e),
+				stack: e instanceof Error ? e.stack : undefined
+			});
 			error = e instanceof Error ? e.message : 'Confirmation failed';
+			messages = [...messages, { role: 'assistant', content: `Action failed: ${error}` }];
 		} finally {
 			loading = false;
+			confirmationProcessing = false;
 		}
 	}
 
@@ -226,6 +258,52 @@
 					}
 				}
 				break;
+			// Notification actions (article workflow completion)
+			case 'article_submitted':
+				console.log('🔔 Notification: article_submitted');
+				// Navigate back to analyst hub
+				goto(topic ? `/analyst/${topic}` : '/analyst');
+				return true;
+			case 'article_published':
+				console.log('🔔 Notification: article_published');
+				// Navigate to editor hub or home
+				goto(topic ? `/editor/${topic}` : '/');
+				return true;
+			case 'article_rejected':
+				console.log('🔔 Notification: article_rejected');
+				// Navigate back to analyst hub to see the rejected article
+				goto(topic ? `/analyst/${topic}` : '/analyst');
+				return true;
+			// Navigation actions (goto_*)
+			case 'goto_home':
+				console.log('🧭 Fallback navigation: goto_home ->', topic);
+				goto(topic ? `/?tab=${topic}` : '/');
+				return true;
+			case 'goto_analyst':
+				console.log('🧭 Fallback navigation: goto_analyst ->', topic);
+				goto(topic ? `/analyst/${topic}` : '/analyst');
+				return true;
+			case 'goto_editor':
+				console.log('🧭 Fallback navigation: goto_editor ->', topic);
+				goto(topic ? `/editor/${topic}` : '/editor');
+				return true;
+			case 'goto_topic_admin':
+				console.log('🧭 Fallback navigation: goto_topic_admin');
+				goto('/admin');
+				return true;
+			case 'goto_admin_global':
+				console.log('🧭 Fallback navigation: goto_admin_global');
+				goto('/admin/global');
+				return true;
+			case 'goto_profile':
+				console.log('🧭 Fallback navigation: goto_profile');
+				goto('/profile');
+				return true;
+			case 'goto_search':
+				console.log('🧭 Fallback navigation: goto_search ->', topic);
+				// Navigate to home with search tab or trigger search modal
+				goto(topic ? `/?tab=${topic}&search=true` : '/?search=true');
+				return true;
 		}
 		return false;
 	}
@@ -253,6 +331,8 @@
 				uiAction: response.ui_action,
 				hasConfirmation: !!response.confirmation,
 				confirmation: response.confirmation,
+				hasArticleContext: !!response.article_context,
+				articleContext: response.article_context,
 				agentType: response.agent_type
 			});
 			messages = [...messages, { role: 'assistant', content: response.response }];
@@ -267,6 +347,17 @@
 			if (response.editor_content) {
 				console.log('✏️ Setting editor content via store:', response.editor_content);
 				handleEditorContent(response.editor_content);
+			}
+
+			// Update navigation context with article info from backend validation
+			if (response.article_context) {
+				console.log('📝 Updating article context from backend:', response.article_context);
+				navigationContext.setArticle(
+					response.article_context.article_id,
+					response.article_context.headline || null,
+					response.article_context.keywords || null,
+					response.article_context.status || null
+				);
 			}
 
 			// Execute UI action command if present

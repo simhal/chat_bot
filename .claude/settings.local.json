@@ -101,7 +101,22 @@
       "Bash(rm:*)",
       "Bash(docker volume:*)",
       "Bash(DATABASE_URL=\"postgresql://chatbot_test_user:chatbot_test_password@localhost:5433/chatbot_test\" REDIS_URL=\"redis://localhost:6380/0\" TESTING=true JWT_SECRET_KEY=\"test-secret-key-for-testing-only\" JWT_ALGORITHM=\"HS256\" uv run pytest tests/api/test_content.py::TestReaderEndpoints -v --tb=short)",
-      "Bash(DATABASE_URL=\"postgresql://chatbot_test_user:chatbot_test_password@localhost:5433/chatbot_test\" REDIS_URL=\"redis://localhost:6380/0\" TESTING=true JWT_SECRET_KEY=\"test-secret-key-for-testing-only\" JWT_ALGORITHM=\"HS256\" uv run pytest:*)"
+      "Bash(DATABASE_URL=\"postgresql://chatbot_test_user:chatbot_test_password@localhost:5433/chatbot_test\" REDIS_URL=\"redis://localhost:6380/0\" TESTING=true JWT_SECRET_KEY=\"test-secret-key-for-testing-only\" JWT_ALGORITHM=\"HS256\" uv run pytest:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.langchain.com)",
+      "WebFetch(domain:python.langchain.com)",
+      "WebFetch(domain:platform.openai.com)",
+      "WebFetch(domain:dylancastillo.co)",
+      "WebFetch(domain:langfuse.com)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:atamel.dev)",
+      "WebFetch(domain:www.leocon.dev)",
+      "WebFetch(domain:dswithmac.com)",
+      "Bash(npm run check:*)",
+      "Bash(MSYS_NO_PATHCONV=1 docker exec:*)",
+      "Bash(timeout 60 docker-compose logs:*)",
+      "Bash(timeout 30 docker-compose logs:*)"
     ]
   }
 }

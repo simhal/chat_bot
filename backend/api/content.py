@@ -966,13 +966,18 @@ async def reject_article(
     editor_check = require_editor(article["topic"])
     editor_check(user)
     
-    # Verify article is in editor status
-    if article["status"] != "editor":
+    # Verify article is in editor status (normalize for comparison)
+    article_status = article["status"]
+    if hasattr(article_status, 'value'):
+        status_str = article_status.value.lower()
+    else:
+        status_str = str(article_status).lower()
+    if status_str != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only articles in editor review can be rejected"
+            detail=f"Only articles in editor review can be rejected. Current status: '{status_str}'"
         )
-    
+
     try:
         updated = ContentService.update_article_status(db, article_id, "draft")
         return {"message": "Article rejected and sent back to draft", "article": updated}
@@ -1003,11 +1008,16 @@ async def publish_article(
     editor_check = require_editor(article["topic"])
     editor_check(user)
 
-    # Verify article is in editor status
-    if article["status"] != "editor":
+    # Verify article is in editor status (normalize for comparison)
+    article_status = article["status"]
+    if hasattr(article_status, 'value'):
+        status_str = article_status.value.lower()
+    else:
+        status_str = str(article_status).lower()
+    if status_str != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only articles in editor review can be published"
+            detail=f"Only articles in editor review can be published. Current status: '{status_str}'"
         )
 
     try:
@@ -1054,7 +1064,7 @@ async def get_article_publication_resources(
     """
     Get publication resource URLs for a published article.
 
-    Returns hash_ids that can be used with /api/resources/content/{hash_id}
+    Returns hash_ids that can be used with /api/r/{hash_id}
     for public access to HTML and PDF versions.
     """
     from services.article_resource_service import ArticleResourceService
@@ -1071,8 +1081,8 @@ async def get_article_publication_resources(
 
     resources = ArticleResourceService.get_article_publication_resources(db, article_id)
 
-    # Build URLs using existing resource content endpoint
-    base_url = "/api/resources/content"
+    # Build URLs using public resource endpoint
+    base_url = "/api/r"
     return {
         "article_id": article_id,
         "resources": {

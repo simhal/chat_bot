@@ -29,7 +29,6 @@ See the interactive diagrams in [diagrams/](./diagrams/) for visual representati
 | **Vector Database** | ChromaDB | Semantic search and embeddings |
 | **Relational Database** | PostgreSQL 16 | Users, groups, content metadata |
 | **Cache Layer** | Redis 7 | Token cache, content cache, sessions |
-| **Background Tasks** | Celery | Heavy agent workflows |
 | **Authentication** | LinkedIn OAuth 2.0, JWT | Enterprise SSO integration |
 | **Package Management** | uv (Python), npm (Node.js) | Fast dependency management |
 | **Containerization** | Docker Compose | Local development and deployment |
@@ -116,8 +115,6 @@ Submit for Review → Editor Review → HITL Approval
 8. **[Multi-Agent Architecture](./08-multi-agent-architecture.md)**
    LangGraph workflow, agent hierarchy, state management, HITL
 
-9. **[Celery Workers](./09-celery-workers.md)**
-   Background task processing, worker queues
 
 ### Content & Storage
 

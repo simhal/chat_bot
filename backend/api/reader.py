@@ -64,18 +64,20 @@ async def get_topic_articles(
     db: Session = Depends(get_db)
 ):
     """
-    Get recent articles for a specific topic.
+    Get published articles for a specific topic.
+    Readers can only access published articles.
 
     Args:
         topic: Topic slug from URL path
         limit: Maximum number of articles to return (default: 10, max: 50)
 
     Returns:
-        List of recent articles for the topic
+        List of published articles for the topic
     """
     user, validated_topic = user_topic
     limit = min(limit, 50)
-    articles = ContentService.get_recent_articles(db, validated_topic, limit)
+    # Readers can only see published articles
+    articles = ContentService.get_published_articles(db, validated_topic, limit)
     return articles
 
 
@@ -87,18 +89,20 @@ async def get_top_rated_articles(
     db: Session = Depends(get_db)
 ):
     """
-    Get top-rated articles for a specific topic.
+    Get top-rated published articles for a specific topic.
+    Readers can only access published articles.
 
     Args:
         topic: Topic slug from URL path
         limit: Maximum number of articles to return (default: 10, max: 50)
 
     Returns:
-        List of top-rated articles
+        List of top-rated published articles
     """
     user, validated_topic = user_topic
     limit = min(limit, 50)
-    articles = ContentService.get_top_rated_articles(db, validated_topic, limit)
+    # Readers can only see published articles
+    articles = ContentService.get_top_rated_articles(db, validated_topic, limit, status="published")
     return articles
 
 
@@ -110,18 +114,20 @@ async def get_most_read_articles(
     db: Session = Depends(get_db)
 ):
     """
-    Get most-read articles for a specific topic.
+    Get most-read published articles for a specific topic.
+    Readers can only access published articles.
 
     Args:
         topic: Topic slug from URL path
         limit: Maximum number of articles to return (default: 10, max: 50)
 
     Returns:
-        List of most-read articles
+        List of most-read published articles
     """
     user, validated_topic = user_topic
     limit = min(limit, 50)
-    articles = ContentService.get_most_read_articles(db, validated_topic, limit)
+    # Readers can only see published articles
+    articles = ContentService.get_most_read_articles(db, validated_topic, limit, status="published")
     return articles
 
 
@@ -133,8 +139,9 @@ async def get_article(
     db: Session = Depends(get_db)
 ):
     """
-    Get a specific article by ID.
+    Get a specific published article by ID.
     Validates article belongs to the specified topic.
+    Readers can only access published articles.
     Increments readership counter.
 
     Args:
@@ -157,6 +164,13 @@ async def get_article(
             detail="Article not found"
         )
 
+    # Readers can only access published articles
+    if article["status"] != "published":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Article is not published"
+        )
+
     return article
 
 
@@ -169,7 +183,8 @@ async def rate_article(
     db: Session = Depends(get_db)
 ):
     """
-    Rate an article (1-5 stars).
+    Rate a published article (1-5 stars).
+    Readers can only rate published articles.
 
     Args:
         topic: Topic slug from URL path
@@ -183,6 +198,19 @@ async def rate_article(
 
     # Validate article belongs to this topic
     validate_article_topic(validated_topic, article_id, db)
+
+    # Check article is published before allowing rating
+    article = ContentService.get_article(db, article_id, increment_readership=False)
+    if not article:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Article not found"
+        )
+    if article["status"] != "published":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Can only rate published articles"
+        )
 
     user_id = int(user.get("sub"))
 
@@ -217,7 +245,8 @@ async def search_articles(
     db: Session = Depends(get_db)
 ):
     """
-    Advanced search for articles with multiple criteria.
+    Advanced search for published articles with multiple criteria.
+    Readers can only search published articles.
 
     Args:
         topic: Topic slug from URL path
@@ -230,11 +259,12 @@ async def search_articles(
         limit: Maximum number of results (default: 10, max: 50)
 
     Returns:
-        List of matching articles
+        List of matching published articles
     """
     user, validated_topic = user_topic
     limit = min(limit, 50)
 
+    # Readers can only search published articles
     articles = ContentService.search_articles(
         db=db,
         topic=validated_topic,
@@ -244,7 +274,8 @@ async def search_articles(
         author=author,
         created_after=created_after,
         created_before=created_before,
-        limit=limit
+        limit=limit,
+        status="published"
     )
 
     return articles
@@ -281,7 +312,8 @@ async def download_article_pdf(
     db: Session = Depends(get_db)
 ):
     """
-    Download article as PDF.
+    Download published article as PDF.
+    Readers can only download PDFs of published articles.
 
     Args:
         topic: Topic slug from URL path
@@ -301,6 +333,13 @@ async def download_article_pdf(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Article not found"
+        )
+
+    # Readers can only download published articles
+    if article["status"] != "published":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Can only download published articles"
         )
 
     try:

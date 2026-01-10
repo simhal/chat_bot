@@ -39,29 +39,10 @@ MARKET_DATA_KEYWORDS = [
     "yield", "rate", "performance", "returns"
 ]
 
-# Topic inference keywords
-TOPIC_KEYWORDS = {
-    "macro": [
-        "economy", "economic", "gdp", "inflation", "fed", "federal reserve",
-        "interest rate", "unemployment", "jobs", "growth", "recession",
-        "monetary policy", "fiscal", "treasury", "ecb", "central bank"
-    ],
-    "equity": [
-        "stock", "equity", "shares", "company", "earnings", "revenue",
-        "profit", "valuation", "p/e", "market cap", "dividend", "nasdaq",
-        "s&p", "dow", "ipo", "buyback"
-    ],
-    "fixed_income": [
-        "bond", "yield", "credit", "treasury", "debt", "coupon",
-        "maturity", "duration", "spread", "default", "investment grade",
-        "high yield", "fixed income", "sovereign"
-    ],
-    "esg": [
-        "esg", "sustainability", "climate", "environmental", "social",
-        "governance", "carbon", "renewable", "green", "impact",
-        "responsible", "ethical"
-    ]
-}
+# Topic inference keywords - DEPRECATED: Use TopicManager.infer_topic() instead
+# Kept as fallback only if TopicManager fails to infer from database
+# These will be phased out once topic keywords are stored in the database
+TOPIC_KEYWORDS: Dict[str, List[str]] = {}
 
 
 def general_chat_node(state: AgentState) -> Dict[str, Any]:
@@ -149,18 +130,32 @@ def general_chat_node(state: AgentState) -> Dict[str, Any]:
 
 
 def _infer_topic(query: str, nav_context: Dict[str, Any]) -> Optional[str]:
-    """Infer the topic from query and navigation context."""
-    # First check navigation context
-    if nav_context.get("topic"):
-        return nav_context["topic"]
+    """
+    Infer the topic from the query itself.
 
-    # Then infer from query
+    For general article queries, we prioritize what the user explicitly mentions
+    in their message. If no topic is mentioned, we search across all topics
+    rather than defaulting to the navigation context topic.
+
+    This ensures queries like "what is the latest research" search all topics,
+    not just the one the user happens to be viewing.
+    """
+    # Use dynamic TopicManager for topic inference from database
+    from agents.topic_manager import infer_topic as tm_infer_topic
+
+    # Try to infer topic from the query using TopicManager
+    topic = tm_infer_topic(query)
+    if topic:
+        return topic
+
+    # Fallback to hardcoded keywords if TopicManager returns nothing
     query_lower = query.lower()
-
-    for topic, keywords in TOPIC_KEYWORDS.items():
+    for topic_slug, keywords in TOPIC_KEYWORDS.items():
         if any(kw in query_lower for kw in keywords):
-            return topic
+            return topic_slug
 
+    # No topic mentioned in query - return None to search all topics
+    # Don't fall back to nav_context topic for general queries
     return None
 
 
@@ -289,9 +284,13 @@ def _search_articles(
     Search articles using ArticleQueryAgent.
 
     Finds relevant articles in the system for context.
+    Includes popup URLs for published articles so chat can link to them.
+    Only searches topics with access_mainchat=True (AI-accessible topics).
     """
     try:
         from agents.article_query_agent import ArticleQueryAgent
+        from agents.topic_manager import get_ai_accessible_topic_slugs
+        from services.article_resource_service import ArticleResourceService
         from database import SessionLocal
 
         db = SessionLocal()
@@ -302,29 +301,57 @@ def _search_articles(
                 api_key=os.getenv("OPENAI_API_KEY", "")
             )
 
-            agent = ArticleQueryAgent(llm=llm, db=db, topic=topic)
+            # If no specific topic, search across all AI-accessible topics
+            search_topic = topic
+            if topic:
+                # Verify the topic is AI-accessible
+                ai_topics = get_ai_accessible_topic_slugs()
+                if topic not in ai_topics:
+                    logger.debug(f"Topic '{topic}' is not AI-accessible, skipping article search")
+                    return []
+
+            agent = ArticleQueryAgent(llm=llm, db=db, topic=search_topic)
 
             result = agent.search_articles(
                 query=query,
                 user_context=user_context,
-                topic=topic,
+                topic=search_topic,
                 limit=5,
-                include_drafts=False  # Only published articles for general chat
+                include_drafts=False,  # Only published articles for general chat
+                ai_accessible_only=True  # Only search AI-accessible topics
             )
 
             articles = result.get("articles", [])
             logger.info(f"📰 Found {len(articles)} relevant articles")
 
-            return [
-                {
+            # Get popup URLs for published articles
+            formatted_articles = []
+            base_url = os.getenv("PUBLIC_API_URL", "http://localhost:8000")
+
+            for a in articles:
+                article_data = {
                     "id": a.get("id"),
                     "headline": a.get("headline"),
                     "topic": a.get("topic"),
                     "status": a.get("status"),
-                    "author": a.get("author")
+                    "author": a.get("author"),
+                    "url": None  # Will be set if article has popup resource
                 }
-                for a in articles
-            ]
+
+                # Get popup URL for published articles
+                if a.get("id") and a.get("status") == "published":
+                    try:
+                        resources = ArticleResourceService.get_article_publication_resources(
+                            db, a.get("id")
+                        )
+                        if resources.get("popup"):
+                            article_data["url"] = f"{base_url}/api/r/{resources['popup']}"
+                    except Exception as e:
+                        logger.debug(f"Could not get popup URL for article {a.get('id')}: {e}")
+
+                formatted_articles.append(article_data)
+
+            return formatted_articles
 
         finally:
             db.close()
@@ -432,13 +459,6 @@ def _build_system_prompt(
     context_data: Dict[str, Any]
 ) -> str:
     """Build the system prompt for response generation."""
-    topic_descriptions = {
-        "macro": "macroeconomics and economic policy",
-        "equity": "equity markets and stock analysis",
-        "fixed_income": "fixed income and bond markets",
-        "esg": "ESG investing and sustainability"
-    }
-
     base_prompt = """You are a helpful financial assistant integrated into a content management system for financial analysis.
 
 Your role is to:
@@ -450,7 +470,11 @@ Your role is to:
 Be conversational but professional. Keep responses concise unless asked for detail."""
 
     if topic:
-        base_prompt += f"\n\nCurrent topic focus: {topic_descriptions.get(topic, topic)}"
+        # Get topic description from database
+        from agents.topic_manager import get_topic_config
+        topic_config = get_topic_config(topic)
+        topic_desc = topic_config.description if topic_config and topic_config.description else topic_config.name if topic_config else topic
+        base_prompt += f"\n\nCurrent topic focus: {topic_desc}"
 
     if tonality:
         base_prompt += f"\n\nUser's preferred communication style: {tonality}"
@@ -478,11 +502,18 @@ Be conversational but professional. Keep responses concise unless asked for deta
 
     if context_data.get("articles"):
         base_prompt += "\n\n## Relevant Articles in System\n"
+        base_prompt += "When referencing articles, use the provided URL to create clickable links.\n\n"
         for article in context_data["articles"][:3]:
             headline = article.get('headline', 'Article')
             topic = article.get('topic', '')
             article_id = article.get('id', '')
-            base_prompt += f"- **{headline}** ({topic}) - Article #{article_id}\n"
+            url = article.get('url')
+            if url:
+                # Article has a popup URL - include it for linking
+                base_prompt += f"- [{headline}]({url}) ({topic}) - Article #{article_id}\n"
+            else:
+                # No URL available - just mention the headline
+                base_prompt += f"- **{headline}** ({topic}) - Article #{article_id}\n"
 
     if context_data.get("resources"):
         base_prompt += "\n\n## Available Resources\n"
@@ -496,7 +527,8 @@ Be conversational but professional. Keep responses concise unless asked for deta
 ## Response Guidelines
 - Use the provided data and context to give accurate, grounded answers
 - If you cite market data, mention it came from the system
-- Reference specific articles when relevant (by ID or headline)
+- When referencing articles, create markdown links using the URLs provided above (e.g., [Article Title](url))
+- If an article has no URL, just mention it by headline and ID
 - If you don't have specific data, say so rather than making up numbers
 - For detailed analysis, suggest the user check the relevant analyst section
 - Keep responses focused and actionable
