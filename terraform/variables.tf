@@ -129,3 +129,10 @@ variable "redis_num_cache_nodes" {
   type        = number
   default     = 1
 }
+
+# Deployment Configuration
+variable "image_tag" {
+  description = "Docker image tag to deploy (e.g., 0.2, latest)"
+  type        = string
+  default     = "latest"
+}
