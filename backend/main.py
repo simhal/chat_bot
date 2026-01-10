@@ -1,6 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from jose import jwt, JWTError
@@ -14,9 +16,12 @@ from database import get_db
 from models import User, Group
 from auth import create_access_token, create_refresh_token, verify_access_token, verify_refresh_token, revoke_access_token, revoke_refresh_token
 
+# Import shared state models for API
+from agents.state import NavigationContextModel
+
 # Import API routers (will be included after app initialization)
 # from api.admin_prompts import router as admin_prompts_router
-# from api.user_profile import router as user_profile_router
+from api.user_profile import router as user_profile_router
 
 
 class Settings(BaseSettings):
@@ -27,7 +32,6 @@ class Settings(BaseSettings):
     google_api_key: str = ""  # For Google Custom Search API
     google_search_engine_id: str = ""  # Custom Search Engine ID
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
-    multi_agent_enabled: bool = True  # Enable/disable multi-agent system
 
     class Config:
         env_file = ".env"
@@ -36,6 +40,79 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to add security headers to all responses.
+
+    Implements OWASP recommended security headers:
+    - X-Frame-Options: Prevents clickjacking attacks
+    - X-Content-Type-Options: Prevents MIME type sniffing
+    - X-XSS-Protection: Legacy XSS filter (still useful for older browsers)
+    - Strict-Transport-Security: Enforces HTTPS connections
+    - Content-Security-Policy: Restricts resource loading (API-appropriate policy)
+    - Referrer-Policy: Controls referrer information leakage
+    - Permissions-Policy: Restricts browser feature access
+
+    Note: Public resource endpoints (/api/r/) are allowed to be embedded in iframes
+    from the same origin to support article HTML rendering in the frontend.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+
+        # Check if this is a public resource endpoint that needs to be embeddable
+        is_embeddable_resource = request.url.path.startswith("/api/r/")
+
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        # Enable browser XSS filter (legacy but still useful)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+
+        # Enforce HTTPS (1 year, include subdomains)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+        # Control referrer information
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        # Restrict browser features
+        response.headers["Permissions-Policy"] = (
+            "accelerometer=(), camera=(), geolocation=(), "
+            "gyroscope=(), magnetometer=(), microphone=(), "
+            "payment=(), usb=()"
+        )
+
+        if is_embeddable_resource:
+            # For public resource endpoints, allow embedding from frontend origins
+            # This is needed for article HTML to be shown in iframe on the frontend
+            # Get allowed origins from CORS settings
+            allowed_origins = settings.cors_origins.split(",")
+            frame_ancestors = " ".join(allowed_origins) + " 'self'"
+
+            # Allow framing from frontend origins (not DENY or SAMEORIGIN)
+            # X-Frame-Options doesn't support multiple origins, so we rely on CSP frame-ancestors
+            # Remove X-Frame-Options to avoid conflicts with CSP
+            if "X-Frame-Options" in response.headers:
+                del response.headers["X-Frame-Options"]
+
+            # CSP for embeddable HTML content - allow styles, scripts, images, and framing from frontend
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: https:; "
+                f"frame-ancestors {frame_ancestors}"
+            )
+        else:
+            # For all other endpoints, deny framing (prevent clickjacking)
+            response.headers["X-Frame-Options"] = "DENY"
+            # Restrictive CSP for API endpoints
+            response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+
+        return response
+
 
 app = FastAPI(title="Chatbot API")
 
@@ -46,21 +123,31 @@ logger = logging.getLogger("uvicorn")
 @app.on_event("startup")
 async def startup_event():
     """Log important configuration on startup."""
+    from observability import configure_langsmith, log_langsmith_status
+
     logger.info("=" * 60)
     logger.info("Chatbot API Starting Up")
     logger.info("=" * 60)
     logger.info(f"OpenAI Model: {settings.openai_model}")
-    logger.info(f"Multi-Agent System: {'ENABLED' if settings.multi_agent_enabled else 'DISABLED'}")
+    logger.info("Multi-Agent System: ENABLED")
     logger.info(f"Google Search Available: {bool(settings.google_api_key and settings.google_search_engine_id)}")
+
+    # Configure LangSmith observability
+    configure_langsmith()
+    log_langsmith_status()
+
     logger.info("=" * 60)
 
-# CORS middleware
+# Security headers middleware (must be added before CORS to wrap responses)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS middleware with tightened configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
 
 security = HTTPBearer()
@@ -68,6 +155,7 @@ security = HTTPBearer()
 
 class ChatMessage(BaseModel):
     message: str
+    navigation_context: Optional[NavigationContextModel] = None
 
 
 class ArticleReference(BaseModel):
@@ -76,11 +164,61 @@ class ArticleReference(BaseModel):
     headline: str
 
 
+class NavigationCommand(BaseModel):
+    """Navigation command that the chat can issue to control the UI."""
+    action: str  # navigate, logout, create_article
+    target: Optional[str] = None  # URL path or section name
+    params: Optional[dict] = None  # Additional parameters (topic, article_id, etc.)
+
+
+class LinkedResource(BaseModel):
+    """Resource linked to an article."""
+    resource_id: int
+    name: str
+    type: str
+    hash_id: Optional[str] = None
+    already_linked: Optional[bool] = False
+
+
+class EditorContent(BaseModel):
+    """Content to fill into the article editor UI (not displayed in chat)."""
+    headline: Optional[str] = None
+    content: Optional[str] = None
+    keywords: Optional[str] = None
+    action: str = "fill"  # fill, append, replace
+    linked_resources: Optional[List[LinkedResource]] = None
+    article_id: Optional[int] = None
+
+
+class UIAction(BaseModel):
+    """UI action command that the chat can trigger (button clicks, tab switches, etc.)."""
+    type: str  # Action type: submit_for_review, save_draft, switch_view_*, etc.
+    params: Optional[dict] = None  # Action parameters (article_id, topic, etc.)
+
+
+class ConfirmationPrompt(BaseModel):
+    """HITL confirmation prompt - displays confirm/cancel buttons in chat."""
+    id: str  # Unique ID for this confirmation
+    type: str  # Confirmation type (e.g., 'publish_approval', 'delete_article')
+    title: str  # Short title (e.g., "Confirm Publication")
+    message: str  # Explanation of what will happen
+    article_id: Optional[int] = None  # Related article ID
+    confirm_label: str  # Button label (e.g., "Publish Now")
+    cancel_label: str  # Button label (e.g., "Cancel")
+    confirm_endpoint: str  # API endpoint to call on confirm
+    confirm_method: Optional[str] = "POST"  # HTTP method
+    confirm_body: Optional[dict] = None  # Request body for confirm
+
+
 class ChatResponse(BaseModel):
     response: str
     agent_type: Optional[str] = None  # Which specialist handled the query
     routing_reason: Optional[str] = None  # Why this specialist was selected
     articles: Optional[List[ArticleReference]] = None  # Referenced articles
+    navigation: Optional[NavigationCommand] = None  # Navigation command for the UI
+    editor_content: Optional[EditorContent] = None  # Content to fill into editor (not chat)
+    ui_action: Optional[UIAction] = None  # UI action to trigger (button clicks, etc.)
+    confirmation: Optional[ConfirmationPrompt] = None  # HITL confirmation prompt with buttons
 
 
 class TokenExchangeRequest(BaseModel):
@@ -111,20 +249,51 @@ from dependencies import get_current_user, require_admin
 # All routers now use shared dependencies from dependencies.py - no monkey-patching needed!
 try:
     from api.admin_prompts import router as admin_prompts_router
-    from api.user_profile import router as user_profile_router
+    from api.user import router as user_router
     from api.content import router as content_router
     from api.prompts import router as prompts_router
-    from api.resources import router as resources_router
+    from api.resources import router as resources_router, public_router as public_resources_router
     from api.topics import router as topics_router
+    from api.reader import router as reader_router
+    from api.analyst import router as analyst_router
+    from api.editor import router as editor_router
+    from api.admin import topic_router as admin_topic_router, global_router as admin_global_router
 
+    # Core routers
     app.include_router(admin_prompts_router)
-    app.include_router(user_profile_router)
-    app.include_router(content_router)
+    app.include_router(user_router)
+    app.include_router(user_profile_router)  # /api/profile/...
     app.include_router(prompts_router)
-    app.include_router(resources_router)
     app.include_router(topics_router)
+
+    # Role-based content routers
+    app.include_router(reader_router)      # /api/reader/{topic}/...
+    app.include_router(analyst_router)     # /api/analyst/{topic}/...
+    app.include_router(editor_router)      # /api/editor/{topic}/...
+    app.include_router(admin_topic_router)   # /api/admin/{topic}/...
+    app.include_router(admin_global_router)  # /api/admin/global/...
+
+    # Resource routers (authenticated + public)
+    app.include_router(resources_router)
+    app.include_router(public_resources_router)
+
+    # Legacy content router (to be removed after migration)
+    app.include_router(content_router)
+
+    logger.info("API routers loaded: admin_prompts, user, prompts, topics, reader, analyst, editor, admin (topic+global), resources")
 except ImportError as e:
     print(f"Warning: Multi-agent API routers not available: {e}")
+
+# Include new multi-agent workflow routers
+try:
+    from api.approvals import router as approvals_router
+    from api.websocket import router as websocket_router
+
+    app.include_router(approvals_router)
+    app.include_router(websocket_router)
+    logger.info("Multi-agent workflow routers loaded: approvals, websocket")
+except ImportError as e:
+    print(f"Warning: Multi-agent workflow routers not available: {e}")
 
 
 @app.get("/")
@@ -431,58 +600,128 @@ async def chat(
     """
     Chat endpoint with multi-agent financial analyst system.
     Routes to specialized agents based on query content.
-    Falls back to legacy single-agent system if multi-agent is disabled.
     """
     try:
         # Get user ID from JWT token
         user_id = int(user.get("sub"))
 
-        if settings.multi_agent_enabled:
-            # Multi-agent content system
-            from services.agent_service import AgentService
-            agent_service = AgentService(user_id, db)
+        # Multi-agent content system
+        from services.agent_service import AgentService
+        from services.user_context_service import UserContextService
 
-            # Process message with routing to content agents
-            result = agent_service.chat(chat_message.message)
+        # Build user context from JWT payload and database
+        user_context = UserContextService.build(user, db)
 
-            # Format response with article references
-            response_text = result["response"]
-            articles = result.get("articles", [])
-            article_references = []
+        # Use Pydantic model's to_dict() for clean conversion
+        nav_context = None
+        if chat_message.navigation_context:
+            nav_context = chat_message.navigation_context.to_dict()
+            logger.info(f"📍 Chat API - Navigation context received: section={nav_context.get('section')}, role={nav_context.get('role')}, article_id={nav_context.get('article_id')}")
 
-            # Add article references at the end if available
-            if articles:
-                response_text += "\n\n---\n**References:**\n"
-                for article in articles:
-                    topic = article['topic']
-                    article_id = article['id']
-                    headline = article['headline']
-                    response_text += f"\n- [{headline}](/?tab={topic}#article-{article_id})"
+        agent_service = AgentService(user_id, db, user_context=user_context)
 
-                    # Build article reference list
-                    article_references.append(ArticleReference(
-                        id=article_id,
-                        topic=topic,
-                        headline=headline
-                    ))
+        # Process message with routing to content agents
+        result = agent_service.chat(chat_message.message, navigation_context=nav_context)
 
-            return ChatResponse(
-                response=response_text,
-                agent_type=result.get("agent_type"),
-                routing_reason=result.get("routing_reason"),
-                articles=article_references if article_references else None
+        # Format response with article references
+        response_text = result["response"]
+        articles = result.get("articles", [])
+        article_references = []
+
+        # Add article references at the end if available
+        if articles:
+            response_text += "\n\n---\n**References:**\n"
+            for article in articles:
+                topic = article['topic']
+                article_id = article['id']
+                headline = article['headline']
+                response_text += f"\n- [{headline}](/?tab={topic}#article-{article_id})"
+
+                # Build article reference list
+                article_references.append(ArticleReference(
+                    id=article_id,
+                    topic=topic,
+                    headline=headline
+                ))
+
+        # Build navigation command if present
+        nav_command = None
+        if result.get("navigation"):
+            nav = result["navigation"]
+            nav_command = NavigationCommand(
+                action=nav.get("action", "navigate"),
+                target=nav.get("target"),
+                params=nav.get("params")
             )
-        else:
-            # Legacy single-agent system
-            from chatbot_agent import ChatbotAgent
 
-            # Create agent for this user (with Redis-backed memory)
-            agent = ChatbotAgent(user_id)
+        # Build editor content if present (content to fill into editor UI, not chat)
+        editor_content = None
+        if result.get("editor_content"):
+            ec = result["editor_content"]
+            # Convert linked resources to LinkedResource objects
+            linked_resources = None
+            if ec.get("linked_resources"):
+                linked_resources = [
+                    LinkedResource(
+                        resource_id=r.get("resource_id"),
+                        name=r.get("name", ""),
+                        type=r.get("type", ""),
+                        hash_id=r.get("hash_id"),
+                        already_linked=r.get("already_linked", False)
+                    )
+                    for r in ec["linked_resources"]
+                ]
+            editor_content = EditorContent(
+                headline=ec.get("headline"),
+                content=ec.get("content"),
+                keywords=ec.get("keywords"),
+                action=ec.get("action", "fill"),
+                linked_resources=linked_resources,
+                article_id=ec.get("article_id")
+            )
 
-            # Process message with conversation context
-            response_text = agent.chat(chat_message.message)
+        # Build UI action if present
+        ui_action = None
+        if result.get("ui_action"):
+            ua = result["ui_action"]
+            ui_action = UIAction(
+                type=ua.get("type"),
+                params=ua.get("params")
+            )
+            logger.info(f"🎯 Chat API - Returning ui_action: type={ui_action.type}, params={ui_action.params}")
 
-            return ChatResponse(response=response_text)
+        # Build HITL confirmation if present
+        confirmation = None
+        if result.get("confirmation"):
+            conf = result["confirmation"]
+            confirmation = ConfirmationPrompt(
+                id=conf.get("id", ""),
+                type=conf.get("type", ""),
+                title=conf.get("title", "Confirm"),
+                message=conf.get("message", ""),
+                article_id=conf.get("article_id"),
+                confirm_label=conf.get("confirm_label", "Confirm"),
+                cancel_label=conf.get("cancel_label", "Cancel"),
+                confirm_endpoint=conf.get("confirm_endpoint", ""),
+                confirm_method=conf.get("confirm_method", "POST"),
+                confirm_body=conf.get("confirm_body", {})
+            )
+            logger.info(f"🔔 Chat API - Returning confirmation: type={confirmation.type}, endpoint={confirmation.confirm_endpoint}")
+
+        # Log the final response structure
+        if editor_content:
+            logger.info(f"📤 Chat API - Returning editor_content: headline={editor_content.headline[:50] if editor_content.headline else 'None'}, content_len={len(editor_content.content or '')}, action={editor_content.action}")
+
+        return ChatResponse(
+            response=response_text,
+            agent_type=result.get("agent_type"),
+            routing_reason=result.get("routing_reason"),
+            articles=article_references if article_references else None,
+            navigation=nav_command,
+            editor_content=editor_content,
+            ui_action=ui_action,
+            confirmation=confirmation
+        )
 
     except Exception as e:
         import traceback
@@ -501,13 +740,20 @@ async def get_chat_history(user: dict = Depends(get_current_user)):
     Get conversation history for the current user.
     """
     try:
-        from chatbot_agent import ChatbotAgent
+        from conversation_memory import create_conversation_memory
 
         user_id = user.get("sub")
-        agent = ChatbotAgent(user_id)
-        history = agent.get_history()
+        message_history = create_conversation_memory(int(user_id))
+        chat_history = message_history.messages
 
-        return {"history": history}
+        # Format messages for response
+        messages = []
+        for msg in chat_history:
+            if hasattr(msg, 'content'):
+                role = "user" if msg.__class__.__name__ == "HumanMessage" else "assistant"
+                messages.append({"role": role, "content": msg.content})
+
+        return {"history": messages}
 
     except Exception as e:
         raise HTTPException(
@@ -522,11 +768,10 @@ async def clear_chat_history(user: dict = Depends(get_current_user)):
     Clear conversation history for the current user.
     """
     try:
-        from chatbot_agent import ChatbotAgent
+        from conversation_memory import clear_conversation_history
 
         user_id = user.get("sub")
-        agent = ChatbotAgent(user_id)
-        agent.clear_history()
+        clear_conversation_history(int(user_id))
 
         return {"message": "Chat history cleared successfully"}
 

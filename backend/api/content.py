@@ -610,7 +610,15 @@ async def chat_with_content_agent(
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import SystemMessage, HumanMessage
         from services.prompt_service import PromptService
+        from agents.web_search_agent import WebSearchAgent
+        from agents.data_download_agent import DataDownloadAgent
+        from agents.article_query_agent import ArticleQueryAgent
+        from services.user_context_service import UserContextService
         import os
+        import re
+        import logging
+
+        logger = logging.getLogger("uvicorn")
 
         # Initialize LLM
         openai_api_key = os.getenv("OPENAI_API_KEY", "")
@@ -622,26 +630,90 @@ async def chat_with_content_agent(
             temperature=0.7
         )
 
+        # Initialize subagents for research
+        web_search_agent = WebSearchAgent(llm=llm, topic=topic)
+        data_download_agent = DataDownloadAgent(llm=llm, db=db, topic=topic)
+        article_query_agent = ArticleQueryAgent(llm=llm, db=db, topic=topic)
+
+        # Build user context
+        user_context = UserContextService.build(user, db)
+
+        # Detect what kind of research is needed from the analyst's message
+        message_lower = request.message.lower()
+        research_context = ""
+
+        # Check for web search needs
+        news_keywords = ["latest", "recent", "news", "current", "today", "update", "search", "find", "research"]
+        if any(kw in message_lower for kw in news_keywords):
+            logger.info(f"[ARTICLE CHAT] Delegating to WebSearchAgent for news research...")
+            search_result = web_search_agent.search_financial_news(request.message, max_results=5)
+            if search_result.get("success") and search_result.get("results"):
+                research_context += "\n### Latest News from Web Search:\n"
+                for i, news in enumerate(search_result["results"][:5], 1):
+                    research_context += f"{i}. **{news.get('title', 'N/A')}**\n"
+                    research_context += f"   Source: {news.get('source', 'N/A')} | Date: {news.get('date', 'N/A')}\n"
+                    research_context += f"   {news.get('snippet', '')[:200]}\n\n"
+                logger.info(f"[ARTICLE CHAT] Got {len(search_result['results'])} news results")
+
+        # Check for stock data needs
+        stock_symbols = re.findall(r'\b([A-Z]{1,5})\b', request.message)
+        common_words = {"I", "A", "THE", "AND", "OR", "FOR", "TO", "IN", "ON", "AT", "IS", "IT", "BE", "AS", "AN", "BY", "SO", "IF", "OF", "US", "UK", "EU", "GDP", "CPI", "FED", "ECB", "FX", "PE", "CEO", "CFO", "IPO", "JSON", "HEADLINE", "CONTENT", "KEYWORDS"}
+        stock_symbols = [s for s in stock_symbols if s not in common_words][:3]
+
+        if stock_symbols:
+            logger.info(f"[ARTICLE CHAT] Delegating to DataDownloadAgent for: {stock_symbols}")
+            research_context += "\n### Live Market Data:\n"
+            for symbol in stock_symbols:
+                stock_result = data_download_agent.fetch_stock_info(symbol)
+                if stock_result.get("success"):
+                    info = stock_result.get("info", {})
+                    research_context += f"\n**{symbol}** - {info.get('name', 'N/A')}\n"
+                    research_context += f"Sector: {info.get('sector', 'N/A')} | Industry: {info.get('industry', 'N/A')}\n"
+                    if info.get('market_cap'):
+                        research_context += f"Market Cap: ${info.get('market_cap', 0):,.0f}\n"
+                    if info.get('pe_ratio'):
+                        research_context += f"P/E Ratio: {info.get('pe_ratio'):.2f}\n"
+                    if info.get('dividend_yield'):
+                        research_context += f"Dividend Yield: {info.get('dividend_yield', 0)*100:.2f}%\n"
+                    logger.info(f"[ARTICLE CHAT] Got data for {symbol}")
+
+        # Check for article reference needs
+        article_keywords = ["similar", "related", "other articles", "previous", "reference", "compare"]
+        if any(kw in message_lower for kw in article_keywords):
+            logger.info(f"[ARTICLE CHAT] Delegating to ArticleQueryAgent for related articles...")
+            article_result = article_query_agent.search_articles(request.message, limit=3)
+            if article_result.get("success") and article_result.get("articles"):
+                research_context += "\n### Related Articles in Knowledge Base:\n"
+                for art in article_result["articles"][:3]:
+                    research_context += f"- **{art.get('headline', 'N/A')}** (ID: {art.get('id')})\n"
+                    research_context += f"  Keywords: {art.get('keywords', 'N/A')}\n"
+                logger.info(f"[ARTICLE CHAT] Got {len(article_result['articles'])} related articles")
+
         # Get system prompt for content agent
         system_prompt = PromptService.get_content_agent_template(topic)
 
-        # Create context-aware prompt
+        # Add user context to prompt
+        user_name = user_context.get("name", "Analyst")
+
+        # Create context-aware prompt with research data
         messages = [
             SystemMessage(content=f"""{system_prompt}
 
-You are helping an analyst edit an article. The analyst will give you instructions on how to modify the article.
+You are helping {user_name} (an analyst) edit an article. The analyst will give you instructions on how to modify the article.
 
 IMPORTANT INSTRUCTIONS:
 1. When the analyst asks you to modify the article, provide the COMPLETE modified article content
 2. Format your response as JSON with these fields:
    - "headline": The modified or original headline
-      - "content": The complete modified article content (in Markdown format)
+   - "content": The complete modified article content (in Markdown format)
    - "keywords": Comma-separated keywords
    - "explanation": Brief explanation of what you changed
 
 3. If the analyst's instruction is unclear, ask for clarification
 4. Maintain the article's professional tone and format
 5. Always return the FULL article content, not just the changes
+6. If research data is provided below, USE IT to enhance the article with current information
+{research_context}
 """),
             HumanMessage(content=f"""Current article:
 
@@ -659,10 +731,6 @@ ANALYST INSTRUCTION: {request.message}
 Please provide your response as JSON with fields: headline, content, keywords, explanation
 """)
         ]
-
-        # Get agent response
-        import logging
-        logger = logging.getLogger("uvicorn")
 
         logger.info(f"[ARTICLE CHAT] Invoking LLM for article {article_id}...")
         # Use async invoke to not block the event loop during long LLM calls
@@ -898,13 +966,18 @@ async def reject_article(
     editor_check = require_editor(article["topic"])
     editor_check(user)
     
-    # Verify article is in editor status
-    if article["status"] != "editor":
+    # Verify article is in editor status (normalize for comparison)
+    article_status = article["status"]
+    if hasattr(article_status, 'value'):
+        status_str = article_status.value.lower()
+    else:
+        status_str = str(article_status).lower()
+    if status_str != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only articles in editor review can be rejected"
+            detail=f"Only articles in editor review can be rejected. Current status: '{status_str}'"
         )
-    
+
     try:
         updated = ContentService.update_article_status(db, article_id, "draft")
         return {"message": "Article rejected and sent back to draft", "article": updated}
@@ -935,11 +1008,16 @@ async def publish_article(
     editor_check = require_editor(article["topic"])
     editor_check(user)
 
-    # Verify article is in editor status
-    if article["status"] != "editor":
+    # Verify article is in editor status (normalize for comparison)
+    article_status = article["status"]
+    if hasattr(article_status, 'value'):
+        status_str = article_status.value.lower()
+    else:
+        status_str = str(article_status).lower()
+    if status_str != "editor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only articles in editor review can be published"
+            detail=f"Only articles in editor review can be published. Current status: '{status_str}'"
         )
 
     try:
@@ -986,7 +1064,7 @@ async def get_article_publication_resources(
     """
     Get publication resource URLs for a published article.
 
-    Returns hash_ids that can be used with /api/resources/content/{hash_id}
+    Returns hash_ids that can be used with /api/r/{hash_id}
     for public access to HTML and PDF versions.
     """
     from services.article_resource_service import ArticleResourceService
@@ -1003,8 +1081,8 @@ async def get_article_publication_resources(
 
     resources = ArticleResourceService.get_article_publication_resources(db, article_id)
 
-    # Build URLs using existing resource content endpoint
-    base_url = "/api/resources/content"
+    # Build URLs using public resource endpoint
+    base_url = "/api/r"
     return {
         "article_id": article_id,
         "resources": {

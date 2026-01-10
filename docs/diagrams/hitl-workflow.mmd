@@ -1,0 +1,45 @@
+%%{init: {'theme': 'base'}}%%
+sequenceDiagram
+    participant Editor
+    participant Frontend
+    participant Backend
+    participant LangGraph
+    participant Redis
+    participant Database
+
+    Editor->>Frontend: Request to publish article
+    Frontend->>Backend: POST /api/chat "publish article #123"
+    Backend->>LangGraph: Invoke Editor Workflow
+
+    LangGraph->>LangGraph: Process publish request
+    LangGraph->>LangGraph: interrupt_before triggered
+    LangGraph->>Redis: Checkpoint workflow state
+    Redis-->>LangGraph: State saved
+
+    LangGraph-->>Backend: Awaiting confirmation
+    Backend-->>Frontend: Response with confirmation prompt
+
+    Frontend->>Editor: Display confirmation dialog
+
+    Note over Editor,Frontend: Human Review Period
+
+    alt Approved
+        Editor->>Frontend: Click "Approve"
+        Frontend->>Backend: POST /api/approvals/{id}/confirm
+        Backend->>LangGraph: Resume workflow (approve)
+        LangGraph->>Redis: Load checkpointed state
+        Redis-->>LangGraph: Restored state
+        LangGraph->>Database: Update article status to PUBLISHED
+        LangGraph-->>Backend: Publication complete
+        Backend-->>Frontend: Success response
+        Frontend->>Editor: Show success message
+    else Rejected
+        Editor->>Frontend: Click "Reject"
+        Frontend->>Backend: POST /api/approvals/{id}/reject
+        Backend->>LangGraph: Resume workflow (reject)
+        LangGraph->>Redis: Load checkpointed state
+        LangGraph->>Database: Keep article in EDITOR status
+        LangGraph-->>Backend: Rejection processed
+        Backend-->>Frontend: Rejection response
+        Frontend->>Editor: Show rejection message
+    end

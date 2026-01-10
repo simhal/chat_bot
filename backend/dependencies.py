@@ -83,10 +83,50 @@ def has_any_role_in_group(scopes: List[str], groupname: str, roles: List[str]) -
 
 
 def is_global_admin(scopes: List[str]) -> bool:
-    """
-    Check if user has global admin role.
-    """
+    """Check if user has global admin role."""
     return has_role(scopes, "global", "admin")
+
+
+def is_global_editor(scopes: List[str]) -> bool:
+    """Check if user has global editor role."""
+    return has_role(scopes, "global", "editor")
+
+
+def is_global_analyst(scopes: List[str]) -> bool:
+    """Check if user has global analyst role."""
+    return has_role(scopes, "global", "analyst")
+
+
+def is_global_reader(scopes: List[str]) -> bool:
+    """Check if user has global reader role."""
+    return has_role(scopes, "global", "reader")
+
+
+def has_global_role_or_higher(scopes: List[str], min_role: str) -> bool:
+    """
+    Check if user has the specified global role or higher.
+
+    Role hierarchy: admin > editor > analyst > reader
+
+    Args:
+        scopes: User's scopes
+        min_role: Minimum required role (reader, analyst, editor, admin)
+
+    Returns:
+        True if user has the role or higher in global scope
+    """
+    role_hierarchy = ["reader", "analyst", "editor", "admin"]
+
+    if min_role not in role_hierarchy:
+        return False
+
+    min_index = role_hierarchy.index(min_role)
+
+    for i in range(min_index, len(role_hierarchy)):
+        if has_role(scopes, "global", role_hierarchy[i]):
+            return True
+
+    return False
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
@@ -306,3 +346,237 @@ def can_edit_prompt(prompt_type: str, prompt_group: str = None):
         )
 
     return check_prompt_edit_permission
+
+
+# =============================================================================
+# Path-based Topic Permission Dependencies
+# =============================================================================
+# These dependencies extract the topic from URL path and validate permissions.
+# Used with routers that have {topic} in their prefix.
+#
+# Permission hierarchy (higher includes lower):
+#   admin > editor > analyst > reader
+#
+# Global roles (global:X) grant access to ALL topics for that role level.
+# Topic roles ({topic}:X) grant access only to that specific topic.
+
+from typing import Tuple
+
+
+async def require_reader_for_topic(
+    topic: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Tuple[dict, str]:
+    """
+    Dependency for /api/reader/{topic}/ routes.
+
+    Requires: Any authenticated user. Topic must exist.
+
+    Args:
+        topic: Topic slug from URL path
+        user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Tuple of (user dict, validated topic slug)
+
+    Raises:
+        HTTPException 400: Invalid topic
+    """
+    # Validate topic exists
+    valid_topics = get_valid_topics(db)
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic: {topic}"
+        )
+
+    # Any authenticated user can read - no role check needed
+    return user, topic
+
+
+async def require_analyst_for_topic(
+    topic: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Tuple[dict, str]:
+    """
+    Dependency for /api/analyst/{topic}/ routes.
+
+    Requires: global:analyst+ OR {topic}:analyst+
+
+    Args:
+        topic: Topic slug from URL path
+        user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Tuple of (user dict, validated topic slug)
+
+    Raises:
+        HTTPException 400: Invalid topic
+        HTTPException 403: Insufficient permissions
+    """
+    scopes = user.get("scopes", [])
+
+    # Validate topic exists
+    valid_topics = get_valid_topics(db)
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic: {topic}"
+        )
+
+    # Global analyst or higher can access all topics
+    if has_global_role_or_higher(scopes, "analyst"):
+        return user, topic
+
+    # Check for analyst+ role in specific topic
+    if has_any_role_in_group(scopes, topic, ["admin", "editor", "analyst"]):
+        return user, topic
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Analyst access required for topic '{topic}'. "
+               f"You need 'global:analyst' or '{topic}:analyst' role (or higher)."
+    )
+
+
+async def require_editor_for_topic(
+    topic: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Tuple[dict, str]:
+    """
+    Dependency for /api/editor/{topic}/ routes.
+
+    Requires: global:editor+ OR {topic}:editor+
+
+    Args:
+        topic: Topic slug from URL path
+        user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Tuple of (user dict, validated topic slug)
+
+    Raises:
+        HTTPException 400: Invalid topic
+        HTTPException 403: Insufficient permissions
+    """
+    scopes = user.get("scopes", [])
+
+    # Validate topic exists
+    valid_topics = get_valid_topics(db)
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic: {topic}"
+        )
+
+    # Global editor or higher can access all topics
+    if has_global_role_or_higher(scopes, "editor"):
+        return user, topic
+
+    # Check for editor+ role in specific topic
+    if has_any_role_in_group(scopes, topic, ["admin", "editor"]):
+        return user, topic
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Editor access required for topic '{topic}'. "
+               f"You need 'global:editor' or '{topic}:editor' role (or higher)."
+    )
+
+
+async def require_admin_for_topic(
+    topic: str,
+    user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Tuple[dict, str]:
+    """
+    Dependency for /api/admin/{topic}/ routes.
+
+    Requires: global:admin OR {topic}:admin
+
+    Args:
+        topic: Topic slug from URL path
+        user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Tuple of (user dict, validated topic slug)
+
+    Raises:
+        HTTPException 400: Invalid topic
+        HTTPException 403: Insufficient permissions
+    """
+    scopes = user.get("scopes", [])
+
+    # Validate topic exists
+    valid_topics = get_valid_topics(db)
+    if topic not in valid_topics:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic: {topic}"
+        )
+
+    # Global admin can access all topics
+    if is_global_admin(scopes):
+        return user, topic
+
+    # Check for admin role in specific topic
+    if has_role(scopes, topic, "admin"):
+        return user, topic
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Admin access required for topic '{topic}'. "
+               f"You need 'global:admin' or '{topic}:admin' role."
+    )
+
+
+def validate_article_topic(topic: str, article_id: int, db: Session):
+    """
+    Validate that an article belongs to the specified topic.
+
+    Used when URL contains both topic and article_id to prevent
+    cross-topic access via URL manipulation.
+
+    Args:
+        topic: Expected topic slug from URL
+        article_id: Article ID from URL
+        db: Database session
+
+    Returns:
+        The article object if validation passes
+
+    Raises:
+        HTTPException 404: Article not found
+        HTTPException 400: Article belongs to different topic
+    """
+    from models import ContentArticle, Topic
+
+    article = db.query(ContentArticle).filter(ContentArticle.id == article_id).first()
+    if not article:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Article {article_id} not found"
+        )
+
+    # Get the article's topic slug - try topic_id first, fallback to legacy topic field
+    if article.topic_id:
+        article_topic = db.query(Topic).filter(Topic.id == article.topic_id).first()
+        article_topic_slug = article_topic.slug if article_topic else None
+    else:
+        # Fallback to legacy topic field for articles created before topic_id was set
+        article_topic_slug = article.topic
+
+    if article_topic_slug != topic:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Article {article_id} belongs to topic '{article_topic_slug}', not '{topic}'"
+        )
+
+    return article

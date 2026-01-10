@@ -1,6 +1,6 @@
 <script lang="ts">
     import { auth } from '$lib/stores/auth';
-    import { getUserProfile, deleteUserAccount, getTopics, type Topic as TopicType } from '$lib/api';
+    import { getUserProfile, deleteUserAccount, getEntitledTopics, type Topic as TopicType } from '$lib/api';
     import { goto } from '$app/navigation';
     import { page } from '$app/stores';
     import { onMount } from 'svelte';
@@ -31,7 +31,9 @@
         if (topicsLoading) return; // Prevent concurrent loads
         try {
             topicsLoading = true;
-            dbTopics = await getTopics(true, true); // active_only, visible_only
+            // Use entitled topics API - returns only topics user can access as reader
+            // Backend filters by: active=true, visible=true, and user has explicit reader entitlement
+            dbTopics = await getEntitledTopics('reader');
             topicsLoadedForUser = $auth.user?.email || 'authenticated';
         } catch (e) {
             console.error('Error loading topics:', e);
@@ -85,12 +87,24 @@
     $: hasAnyAnalystAccess = (userScopes, topics.some(t => hasAnalystAccess(t.id)));
     $: hasAnyEditorAccess = (userScopes, topics.some(t => hasEditorAccess(t.id)));
 
+    // Check if user has topic admin access (for any topic)
+    function hasTopicAdminAccess(topic: string): boolean {
+        if (!$auth.user?.scopes) return false;
+        if ($auth.user.scopes.includes('global:admin')) return true;
+        return $auth.user.scopes.includes(`${topic}:admin`);
+    }
+    $: hasAnyTopicAdminAccess = (userScopes, topics.some(t => hasTopicAdminAccess(t.id)));
+
+    // Check if user has global admin access
+    $: isGlobalAdmin = userScopes.includes('global:admin');
+
     // Determine active route
     $: currentPath = $page.url.pathname;
     $: isHome = currentPath === '/';
     $: isAnalyst = currentPath.startsWith('/analyst');
     $: isEditor = currentPath.startsWith('/editor');
-    $: isAdmin = currentPath.startsWith('/admin');
+    $: isTopicAdmin = currentPath === '/admin' || (currentPath.startsWith('/admin') && !currentPath.startsWith('/admin/global'));
+    $: isGlobalAdminPage = currentPath.startsWith('/admin/global');
     $: isProfile = currentPath.startsWith('/profile');
     // Get active topic from query param on home page
     $: activeTopic = isHome ? $page.url.searchParams.get('tab') : null;
@@ -110,6 +124,19 @@
         goto('/profile');
     }
 
+    /**
+     * Handle topic click with toggle behavior.
+     * Clicking an already-active topic deselects it (navigates to search).
+     */
+    function handleTopicClick(event: MouseEvent, topicId: string) {
+        if (activeTopic === topicId) {
+            // Already active - toggle off (go to search view)
+            event.preventDefault();
+            goto('/?tab=search');
+        }
+        // Otherwise, let the normal <a> navigation happen
+    }
+
     function formatDate(dateString: string) {
         return new Date(dateString).toLocaleDateString('en-US', {
             year: 'numeric',
@@ -122,12 +149,16 @@
 <header>
     {#if $auth.isAuthenticated}
         <nav class="header-nav">
-            <!-- Topic tabs on the left -->
+            <!-- Topic tabs on the left (Chat removed - now always visible in split pane) -->
             <div class="topic-nav">
-                <a href="/" class="nav-link topic-link" class:active={isHome && (!activeTopic || activeTopic === 'chat')}>Chat</a>
                 <a href="/?tab=search" class="nav-link topic-link" class:active={isHome && activeTopic === 'search'}>Search</a>
                 {#each accessibleTopics as topic}
-                    <a href="/?tab={topic.id}" class="nav-link topic-link" class:active={isHome && activeTopic === topic.id}>{topic.label}</a>
+                    <a
+                        href="/?tab={topic.id}"
+                        class="nav-link topic-link"
+                        class:active={isHome && activeTopic === topic.id}
+                        on:click={(e) => handleTopicClick(e, topic.id)}
+                    >{topic.label}</a>
                 {/each}
             </div>
 
@@ -139,8 +170,11 @@
                 {#if hasAnyEditorAccess}
                     <a href="/editor" class="nav-link function-link" class:active={isEditor}>Editor</a>
                 {/if}
-                {#if $auth.user?.scopes?.includes('global:admin')}
-                    <a href="/admin" class="nav-link function-link" class:active={isAdmin}>Admin</a>
+                {#if hasAnyTopicAdminAccess}
+                    <a href="/admin" class="nav-link function-link" class:active={isTopicAdmin}>Topic Admin</a>
+                {/if}
+                {#if isGlobalAdmin}
+                    <a href="/admin/global" class="nav-link function-link" class:active={isGlobalAdminPage}>Global Admin</a>
                 {/if}
                 <a href="/profile" class="nav-link function-link" class:active={isProfile}>Profile</a>
             </div>

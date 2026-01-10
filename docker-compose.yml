@@ -1,3 +1,6 @@
+# Development environment - data persists across restarts
+# Use: docker-compose up -d
+name: chatbot-app
 
 services:
   # PostgreSQL database - start separately with: docker-compose up -d postgres
@@ -57,15 +60,11 @@ services:
     container_name: chatbot-backend
     ports:
       - "8000:8000"
-    # environment:
-    #   - LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
-    #   - OPENAI_API_KEY=${OPENAI_API_KEY}
-    #   - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-    #   - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
     env_file:
       - ./backend/.env
     volumes:
       - uploads_data:/app/uploads
+      - ./docs:/app/docs:ro  # Mount docs for frontend documentation (read-only)
     depends_on:
       postgres:
         condition: service_healthy

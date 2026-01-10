@@ -861,6 +861,167 @@ class ResourceService:
 
         return results, total
 
+    @staticmethod
+    def list_resources_by_group_ids(
+        db: Session,
+        resource_type: Optional[ResourceType] = None,
+        group_ids: List[int] = None,
+        search: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List resources belonging to any of the specified group IDs.
+
+        This is used for listing topic resources where a topic has multiple groups
+        (admin, analyst, editor, reader).
+
+        Args:
+            group_ids: List of group IDs to filter by. If empty, returns no resources.
+
+        Returns tuple of (list of resource dicts, total count).
+        """
+        # If no group_ids provided, return empty result
+        if not group_ids:
+            return [], 0
+
+        query = db.query(Resource).filter(Resource.is_active == True)
+
+        if resource_type:
+            query = query.filter(Resource.resource_type == resource_type)
+
+        # Filter by any of the provided group IDs
+        query = query.filter(Resource.group_id.in_(group_ids))
+
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(
+                or_(
+                    Resource.name.ilike(search_pattern),
+                    Resource.description.ilike(search_pattern)
+                )
+            )
+
+        total = query.count()
+        resources = query.order_by(desc(Resource.created_at)).offset(offset).limit(limit).all()
+
+        results = []
+        for r in resources:
+            results.append({
+                "id": r.id,
+                "hash_id": r.hash_id,
+                "resource_type": r.resource_type.value if hasattr(r.resource_type, 'value') else r.resource_type,
+                "status": r.status.value if hasattr(r.status, 'value') else r.status,
+                "name": r.name,
+                "description": r.description,
+                "group_id": r.group_id,
+                "parent_id": r.parent_id,
+                "created_by": r.created_by,
+                "modified_by": r.modified_by,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                "is_active": r.is_active
+            })
+
+        return results, total
+
+    @staticmethod
+    def list_topic_resources(
+        db: Session,
+        topic: str,
+        resource_type: Optional[ResourceType] = None,
+        group_ids: List[int] = None,
+        search: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 50
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List all resources for a topic, including:
+        1. Resources with group_id matching any of the topic's groups
+        2. ARTICLE resources linked to articles in this topic (via article_resources table)
+
+        Args:
+            topic: Topic slug (e.g., "macro", "equity")
+            resource_type: Optional filter by resource type
+            group_ids: List of group IDs for this topic
+            search: Optional search term
+            offset: Pagination offset
+            limit: Pagination limit
+
+        Returns tuple of (list of resource dicts, total count).
+        """
+        from sqlalchemy import select, exists
+
+        # Build the base query
+        query = db.query(Resource).filter(Resource.is_active == True)
+
+        if resource_type:
+            query = query.filter(Resource.resource_type == resource_type)
+
+        # Build conditions for topic resources:
+        # 1. Resources with group_id in the topic's groups
+        # 2. ARTICLE resources linked to articles with this topic
+        conditions = []
+
+        if group_ids:
+            conditions.append(Resource.group_id.in_(group_ids))
+
+        # Subquery to find ARTICLE resources linked to articles in this topic
+        # Join article_resources to find resource IDs, then join to articles to filter by topic
+        article_resource_subquery = (
+            select(article_resources.c.resource_id)
+            .join(ContentArticle, ContentArticle.id == article_resources.c.article_id)
+            .where(ContentArticle.topic == topic)
+            .where(ContentArticle.is_active == True)
+        )
+
+        # Include ARTICLE resources linked to articles in this topic
+        conditions.append(
+            and_(
+                Resource.resource_type == ResourceType.ARTICLE,
+                Resource.id.in_(article_resource_subquery)
+            )
+        )
+
+        # Apply the OR of all conditions
+        if conditions:
+            query = query.filter(or_(*conditions))
+        else:
+            # No conditions means no resources (shouldn't happen, but be safe)
+            return [], 0
+
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(
+                or_(
+                    Resource.name.ilike(search_pattern),
+                    Resource.description.ilike(search_pattern)
+                )
+            )
+
+        total = query.count()
+        resources = query.order_by(desc(Resource.created_at)).offset(offset).limit(limit).all()
+
+        results = []
+        for r in resources:
+            results.append({
+                "id": r.id,
+                "hash_id": r.hash_id,
+                "resource_type": r.resource_type.value if hasattr(r.resource_type, 'value') else r.resource_type,
+                "status": r.status.value if hasattr(r.status, 'value') else r.status,
+                "name": r.name,
+                "description": r.description,
+                "group_id": r.group_id,
+                "parent_id": r.parent_id,
+                "created_by": r.created_by,
+                "modified_by": r.modified_by,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                "is_active": r.is_active
+            })
+
+        return results, total
+
     # ==========================================================================
     # RESOURCE UPDATE/DELETE
     # ==========================================================================

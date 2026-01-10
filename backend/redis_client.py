@@ -22,6 +22,11 @@ redis_client = redis.from_url(
 )
 
 
+def get_redis_client():
+    """Get the Redis client instance."""
+    return redis_client
+
+
 class TokenCache:
     """Helper class for managing token cache in Redis."""
 

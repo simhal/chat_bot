@@ -1,0 +1,60 @@
+%%{init: {'theme': 'base'}}%%
+graph LR
+    subgraph Public["Public Endpoints"]
+        Health["/health"]
+        Resources["/api/r/{hash_id}"]
+    end
+
+    subgraph Auth["Authentication"]
+        Login["/api/auth/linkedin"]
+        Callback["/api/auth/callback"]
+        Refresh["/api/auth/refresh"]
+        Logout["/api/auth/logout"]
+    end
+
+    subgraph Reader["Reader Routes<br>/api/reader/{topic}"]
+        R_Articles["/articles"]
+        R_Article["/article/{id}"]
+        R_Search["/search"]
+        R_Rate["/article/{id}/rate"]
+        R_PDF["/article/{id}/pdf"]
+        R_Resources["/article/{id}/resources"]
+        R_TopRated["/articles/top-rated"]
+        R_MostRead["/articles/most-read"]
+        R_Published["/published"]
+    end
+
+    subgraph Analyst["Analyst Routes<br>/api/analyst/{topic}"]
+        A_Articles["/articles"]
+        A_Create["POST /article"]
+        A_Edit["PUT /article/{id}"]
+        A_Submit["/article/{id}/submit"]
+        A_Generate["/generate"]
+        A_Chat["/article/{id}/chat"]
+    end
+
+    subgraph Editor["Editor Routes<br>/api/editor/{topic}"]
+        E_Articles["/articles"]
+        E_Reject["/article/{id}/reject"]
+        E_Publish["/article/{id}/publish"]
+    end
+
+    subgraph Admin_Topic["Topic Admin Routes<br>/api/admin/{topic}"]
+        AT_Articles["/articles"]
+        AT_Delete["DELETE /article/{id}"]
+        AT_Reactivate["/article/{id}/reactivate"]
+        AT_Recall["/article/{id}/recall"]
+        AT_Regenerate["/article/{id}/regenerate-resources"]
+    end
+
+    subgraph Admin_Global["Global Admin Routes<br>/api/admin/global"]
+        AG_Purge["DELETE /article/{id}/purge"]
+        AG_Reorder["/articles/reorder"]
+        AG_RegenerateAll["/articles/regenerate-all-resources"]
+        AG_Sync["/sync-article"]
+        AG_PurgeOrphans["/resources/purge-orphans"]
+    end
+
+    subgraph Chat["Chat Endpoint"]
+        ChatAPI["POST /api/chat"]
+    end

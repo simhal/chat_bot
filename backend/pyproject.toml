@@ -1,3 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Backend is not a package - it's a FastAPI application
+# We only need setuptools for installing test dependencies
+packages = []
+
 [project]
 name = "backend"
 version = "0.1.0"
@@ -14,6 +23,8 @@ dependencies = [
     "langchain-openai>=0.2.0",
     "langchain-community>=0.3.0",
     "langgraph>=0.2.0",
+    "langgraph-checkpoint-redis>=0.3.0",
+    "langsmith>=0.1.0",
     "openai>=2.8.1",
     "chromadb>=0.4.22",
     "psycopg2-binary>=2.9.10",
@@ -21,7 +32,7 @@ dependencies = [
     "pydantic-settings>=2.12.0",
     "python-jose[cryptography]>=3.5.0",
     "python-multipart>=0.0.20",
-    "redis>=5.2.0",
+    "redis[hiredis]>=5.2.0",
     "requests>=2.31.0",
     "sqlalchemy>=2.0.37",
     "uvicorn>=0.38.0",
@@ -32,4 +43,50 @@ dependencies = [
     "weasyprint>=61.0",
     "matplotlib>=3.8.0",
     "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "pytest-xdist>=3.5.0",
+    "httpx>=0.28.1",
+    "factory-boy>=3.3.0",
+    "faker>=28.0.0",
+    "respx>=0.21.0",
+    "freezegun>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "integration: Integration tests (requires database)",
+    "e2e: End-to-end tests (requires all services)",
+    "slow: Slow tests that can be skipped with -m 'not slow'",
+]
+
+[tool.coverage.run]
+source = ["api", "services", "agents"]
+omit = ["tests/*", "alembic/*"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
 ]

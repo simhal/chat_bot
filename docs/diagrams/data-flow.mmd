@@ -1,0 +1,63 @@
+%%{init: {'theme': 'base'}}%%
+flowchart LR
+    subgraph Input["User Input"]
+        Chat[Chat Message]
+        Form[Form Submission]
+        Action[UI Action]
+    end
+
+    subgraph Frontend["Frontend Processing"]
+        NavContext[Navigation Context]
+        ActionStore[Action Store]
+        APIClient[API Client]
+    end
+
+    subgraph Backend["Backend Processing"]
+        FastAPI[FastAPI Endpoint]
+        AuthMiddleware[JWT Validation]
+        PermCheck[Permission Check]
+        Service[Service Layer]
+    end
+
+    subgraph Agents["Agent System"]
+        MainAgent[Main Chat Agent]
+        SubAgents[Sub-Agents]
+        Tools[Agent Tools]
+    end
+
+    subgraph Storage["Data Storage"]
+        PostgreSQL[(PostgreSQL<br>Relational Data)]
+        Redis[(Redis<br>Cache & Sessions)]
+        ChromaDB[(ChromaDB<br>Vector Search)]
+    end
+
+    subgraph Output["Response"]
+        Response[API Response]
+        UIUpdate[UI Update]
+        ActionResult[Action Result]
+    end
+
+    Chat --> NavContext
+    Form --> APIClient
+    Action --> ActionStore
+
+    NavContext --> APIClient
+    ActionStore --> APIClient
+    APIClient --> FastAPI
+
+    FastAPI --> AuthMiddleware
+    AuthMiddleware --> PermCheck
+    PermCheck --> Service
+    Service --> MainAgent
+
+    MainAgent --> SubAgents
+    SubAgents --> Tools
+    Tools --> PostgreSQL
+    Tools --> ChromaDB
+    Service --> Redis
+
+    Service --> Response
+    MainAgent --> Response
+    Response --> UIUpdate
+    Response --> ActionResult
+    ActionResult --> ActionStore

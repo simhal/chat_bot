@@ -2,7 +2,12 @@
     import { auth } from '$lib/stores/auth';
     import { getUserProfile, deleteUserAccount, getTonalities, getUserTonality, updateUserTonality, type TonalityOption, type TonalityPreferences } from '$lib/api';
     import { goto } from '$app/navigation';
-    import { onMount } from 'svelte';
+    import { onMount, onDestroy } from 'svelte';
+    import { navigationContext } from '$lib/stores/navigation';
+    import { actionStore, type UIAction, type ActionResult } from '$lib/stores/actions';
+
+    // Set navigation context for profile section
+    navigationContext.setContext({ section: 'profile', topic: null, subNav: null, articleId: null, articleHeadline: null, articleKeywords: null, articleStatus: null, role: 'reader', resourceId: null, resourceName: null, resourceType: null, viewMode: null });
 
     interface UserProfile {
         id: number;
@@ -115,9 +120,56 @@
         });
     }
 
+    // Action handlers for chat-triggered UI actions
+    let actionUnsubscribers: (() => void)[] = [];
+
+    async function handleSwitchProfileTabAction(action: UIAction): Promise<ActionResult> {
+        const tab = action.params?.tab;
+        if (!tab) {
+            return { success: false, action: 'switch_profile_tab', error: 'No tab specified' };
+        }
+        currentTab = tab as ProfileTab;
+        // Update navigation context
+        navigationContext.setSubNav(tab);
+        return { success: true, action: 'switch_profile_tab', message: `Switched to ${tab} tab` };
+    }
+
+    async function handleSaveTonalityAction(action: UIAction): Promise<ActionResult> {
+        try {
+            await saveTonalityPreferences();
+            return { success: true, action: 'save_tonality', message: 'Tonality preferences saved' };
+        } catch (e) {
+            return { success: false, action: 'save_tonality', error: e instanceof Error ? e.message : 'Failed to save' };
+        }
+    }
+
+    async function handleDeleteAccountAction(action: UIAction): Promise<ActionResult> {
+        if (!action.params?.confirmed) {
+            return { success: false, action: 'delete_account', error: 'Action requires confirmation' };
+        }
+        try {
+            await handleDeleteAccount();
+            return { success: true, action: 'delete_account', message: 'Account deleted' };
+        } catch (e) {
+            return { success: false, action: 'delete_account', error: e instanceof Error ? e.message : 'Failed to delete account' };
+        }
+    }
+
     onMount(() => {
         loadUserProfile();
         loadTonalities();
+
+        // Register action handlers for this page
+        actionUnsubscribers.push(
+            actionStore.registerHandler('switch_profile_tab', handleSwitchProfileTabAction),
+            actionStore.registerHandler('save_tonality', handleSaveTonalityAction),
+            actionStore.registerHandler('delete_account', handleDeleteAccountAction)
+        );
+    });
+
+    onDestroy(() => {
+        // Unregister action handlers
+        actionUnsubscribers.forEach(unsub => unsub());
     });
 </script>
 

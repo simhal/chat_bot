@@ -57,7 +57,16 @@ class ArticleStatus(str, enum.Enum):
     """Article status enum."""
     DRAFT = "draft"
     EDITOR = "editor"
+    PENDING_APPROVAL = "pending_approval"  # Awaiting human approval for publishing
     PUBLISHED = "published"
+
+
+class ApprovalStatus(str, enum.Enum):
+    """Approval request status enum."""
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
 
 
 class PromptType(str, enum.Enum):
@@ -158,10 +167,10 @@ class User(Base):
     custom_prompt = Column(Text, nullable=True)
 
     # User-selected tonality for chat responses (FK to PromptModule with type=tonality)
-    chat_tonality_id = Column(Integer, ForeignKey('prompt_modules.id', ondelete='SET NULL'), nullable=True)
+    chat_tonality_id = Column(Integer, ForeignKey('prompt_modules.id', ondelete='SET NULL', name='fk_users_chat_tonality'), nullable=True)
 
     # User-selected tonality for content/article generation (FK to PromptModule with type=tonality)
-    content_tonality_id = Column(Integer, ForeignKey('prompt_modules.id', ondelete='SET NULL'), nullable=True)
+    content_tonality_id = Column(Integer, ForeignKey('prompt_modules.id', ondelete='SET NULL', name='fk_users_content_tonality'), nullable=True)
 
     # Relationship to groups
     groups = relationship('Group', secondary=user_groups, back_populates='users')
@@ -250,9 +259,9 @@ class PromptModule(Base):
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    created_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL', name='fk_prompt_modules_created_by'), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-    updated_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    updated_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL', name='fk_prompt_modules_updated_by'), nullable=True)
 
     # Relationships
     creator = relationship('User', foreign_keys=[created_by])
@@ -399,6 +408,11 @@ class ContentArticle(Base):
     # Active status (can be deactivated by admin)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
 
+    # Publication resource hash_id - persists across republish cycles
+    # Generated on first publish and reused on subsequent publishes
+    # HTML and PDF children are derived from parent via parent_id relationship
+    popup_hash_id = Column(String(64), nullable=True, index=True)
+
     # Relationship to Topic
     topic_ref = relationship('Topic', back_populates='articles')
 
@@ -442,6 +456,54 @@ class ContentRating(Base):
 
     def __repr__(self):
         return f"<ContentRating(id={self.id}, article_id={self.article_id}, user_id={self.user_id}, rating={self.rating})>"
+
+
+class ApprovalRequest(Base):
+    """
+    Human-in-the-loop approval requests for article publishing.
+
+    When an editor submits an article for publishing, an approval request is
+    created. The article enters PENDING_APPROVAL status until a human reviewer
+    approves or rejects the request.
+    """
+    __tablename__ = 'approval_requests'
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Article being approved
+    article_id = Column(Integer, ForeignKey('content_articles.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    # Request details
+    requested_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    requested_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    editor_notes = Column(Text, nullable=True)
+
+    # Status tracking
+    status = Column(
+        Enum(ApprovalStatus, values_callable=lambda x: [e.value for e in x], name='approval_status', create_type=False),
+        default=ApprovalStatus.PENDING,
+        nullable=False,
+        index=True
+    )
+
+    # Review details (populated when reviewed)
+    reviewed_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    review_notes = Column(Text, nullable=True)
+
+    # Expiration (optional - requests can expire after 24 hours)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    # LangGraph workflow tracking
+    thread_id = Column(String(255), nullable=True, index=True)  # For resuming interrupted workflows
+
+    # Relationships
+    article = relationship('ContentArticle', backref='approval_requests')
+    requester = relationship('User', foreign_keys=[requested_by])
+    reviewer = relationship('User', foreign_keys=[reviewed_by])
+
+    def __repr__(self):
+        return f"<ApprovalRequest(id={self.id}, article_id={self.article_id}, status={self.status.value})>"
 
 
 # =============================================================================

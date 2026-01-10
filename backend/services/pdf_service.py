@@ -45,7 +45,7 @@ class PDFService:
         ).first()
 
         if image_child:
-            return f"{base_url}/api/resources/content/{image_child.hash_id}"
+            return f"{base_url}/api/r/{image_child.hash_id}"
         return None
 
     @staticmethod
@@ -71,7 +71,7 @@ class PDFService:
         def replace_resource(match):
             name = match.group(1)
             hash_id = match.group(2)
-            content_url = f"{base_url}/api/resources/content/{hash_id}"
+            content_url = f"{base_url}/api/r/{hash_id}"
 
             # Check resource type
             resource_type = None
@@ -89,6 +89,30 @@ class PDFService:
                     return f'[{name}]({content_url})'
             elif resource_type == 'image':
                 return f'![{name}]({content_url})'
+            elif resource_type == 'article':
+                # For ARTICLE resources (published article popup), include links to child resources
+                pdf_url = None
+                html_url = None
+                if db:
+                    article_resource = db.query(Resource).filter(Resource.hash_id == hash_id).first()
+                    if article_resource:
+                        for child in article_resource.children:
+                            if child.resource_type and child.resource_type.value == 'pdf':
+                                pdf_url = f"{base_url}/api/r/{child.hash_id}"
+                            elif child.resource_type and child.resource_type.value == 'html':
+                                html_url = f"{base_url}/api/r/{child.hash_id}"
+
+                # Build reference text with available links
+                links = [f"[View Article]({content_url})"]
+                if html_url:
+                    links.append(f"[HTML]({html_url})")
+                if pdf_url:
+                    links.append(f"[PDF]({pdf_url})")
+
+                return f'\n\n> **{name}**\n> {" | ".join(links)}\n\n'
+            elif resource_type == 'html':
+                # For HTML resources, just show as link (can't embed iframe in PDF)
+                return f'[{name}]({content_url})'
             else:
                 return f'[{name}]({content_url})'
 

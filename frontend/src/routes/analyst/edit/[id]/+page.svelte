@@ -2,10 +2,22 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/stores/auth';
-    import { getArticle, editArticle, chatWithContentAgent, approveArticle, getArticleResources, getGlobalResources, getGroupResources, getResource, getResourceContentUrl, type Resource } from '$lib/api';
-    import { onMount } from 'svelte';
+    import { getAnalystArticle, editArticle, chatWithContentAgent, submitArticleForReview, getArticleResources, getGlobalResources, getGroupResources, getResource, getResourceContentUrl, type Resource } from '$lib/api';
+    import { onMount, onDestroy } from 'svelte';
     import Markdown from '$lib/components/Markdown.svelte';
     import ResourceEditor from '$lib/components/ResourceEditor.svelte';
+    import { navigationContext, editorContentStore, type EditorContentPayload } from '$lib/stores/navigation';
+    import { actionStore, type UIAction, type ActionResult } from '$lib/stores/actions';
+
+    // Shared localStorage key for topic persistence
+    const SELECTED_TOPIC_KEY = 'selected_topic';
+
+    function getStoredTopic(): string | null {
+        if (typeof localStorage !== 'undefined') {
+            return localStorage.getItem(SELECTED_TOPIC_KEY);
+        }
+        return null;
+    }
 
     interface Article {
         id: number;
@@ -70,7 +82,16 @@
         try {
             loading = true;
             error = '';
-            article = await getArticle(articleId);
+
+            // Get stored topic from localStorage (set by analyst page)
+            const storedTopic = getStoredTopic();
+            if (!storedTopic) {
+                error = 'Cannot determine article topic. Please navigate from the analyst page.';
+                loading = false;
+                return;
+            }
+
+            article = await getAnalystArticle(storedTopic, articleId);
 
             if (!canEditTopic(article.topic)) {
                 error = 'You do not have permission to edit this article';
@@ -80,6 +101,18 @@
             editHeadline = article.headline;
             editContent = article.content;
             editKeywords = article.keywords || '';
+
+            // Update navigation context with article details for chat agent
+            navigationContext.setContext({
+                section: 'analyst',
+                topic: article.topic,
+                subNav: 'editing',
+                articleId: article.id,
+                articleHeadline: article.headline,
+                articleKeywords: article.keywords || null,
+                articleStatus: article.status || null,
+                role: 'analyst'
+            });
 
             // Load resources
             await loadResources();
@@ -137,11 +170,11 @@
         try {
             // Save the article first before changing status
             saving = true;
-            await editArticle(article.id, editHeadline, editContent, editKeywords, article.status);
+            await editArticle(article.topic, article.id, editHeadline, editContent, editKeywords, article.status);
             saving = false;
 
             // Then submit to editor
-            await approveArticle(article.id);
+            await submitArticleForReview(article.topic, article.id);
             goto(`/analyst/${article.topic}`);
         } catch (e) {
             saving = false;
@@ -155,7 +188,7 @@
         try {
             saving = true;
             error = '';
-            await editArticle(article.id, editHeadline, editContent, editKeywords, article.status);
+            await editArticle(article.topic, article.id, editHeadline, editContent, editKeywords, article.status);
 
             // Reload article to get updated data
             await loadArticle();
@@ -190,6 +223,7 @@
             chatLoading = true;
 
             const response = await chatWithContentAgent(
+                article.topic,
                 article.id,
                 userMessage,
                 editHeadline,
@@ -359,8 +393,156 @@
         }
     }
 
+    // Subscribe to editor content from the main chat panel
+    let editorContentUnsubscribe: (() => void) | null = null;
+    let lastContentTimestamp = 0;
+
+    function handleEditorContent(payload: EditorContentPayload | null) {
+        if (!payload || payload.timestamp <= lastContentTimestamp) return;
+
+        lastContentTimestamp = payload.timestamp;
+
+        // Apply the content based on action
+        if (payload.action === 'fill' || payload.action === 'replace') {
+            if (payload.headline) editHeadline = payload.headline;
+            if (payload.content) editContent = payload.content;
+            if (payload.keywords) editKeywords = payload.keywords;
+        } else if (payload.action === 'append') {
+            if (payload.content) editContent += '\n\n' + payload.content;
+        }
+
+        // Check if new resources were linked
+        const linkedResources = payload.linked_resources || [];
+        const newlyLinked = linkedResources.filter(r => !r.already_linked);
+
+        // Build message with resource info
+        let message = 'Content has been generated and filled into the editor fields.';
+        if (newlyLinked.length > 0) {
+            message += `\n\n${newlyLinked.length} resource(s) have been linked to this article:`;
+            for (const r of newlyLinked) {
+                message += `\n• ${r.name} (${r.type})`;
+            }
+            message += '\n\nSwitching to Resources view...';
+        }
+        message += '\n\nPlease review and make any adjustments.';
+
+        // Add a message to the local chat to indicate content was received
+        chatMessages = [...chatMessages, {
+            role: 'agent',
+            content: message,
+            timestamp: new Date()
+        }];
+
+        // If resources were linked, refresh the resources panel and switch to resources view
+        if (newlyLinked.length > 0) {
+            loadResources();
+            viewMode = 'resources';
+        }
+
+        // Clear the store after consuming
+        editorContentStore.clear();
+    }
+
+    // Action handlers for chat-triggered UI actions
+    let actionUnsubscribers: (() => void)[] = [];
+
+    async function handleSaveDraftAction(action: UIAction): Promise<ActionResult> {
+        if (!article) {
+            return { success: false, action: 'save_draft', error: 'No article loaded' };
+        }
+        try {
+            await handleSave();
+            return { success: true, action: 'save_draft', message: 'Article saved successfully' };
+        } catch (e) {
+            return { success: false, action: 'save_draft', error: e instanceof Error ? e.message : 'Failed to save' };
+        }
+    }
+
+    async function handleSubmitForReviewAction(action: UIAction): Promise<ActionResult> {
+        if (!article) {
+            return { success: false, action: 'submit_for_review', error: 'No article loaded' };
+        }
+        try {
+            // Save the article first before changing status
+            saving = true;
+            await editArticle(article.topic, article.id, editHeadline, editContent, editKeywords, article.status);
+            saving = false;
+
+            // Submit to editor (change status)
+            await submitArticleForReview(article.topic, article.id);
+
+            // Reload article to get updated status - stay on page, keep article focus
+            await loadArticle();
+
+            return { success: true, action: 'submit_for_review', message: `Article #${article.id} submitted for review` };
+        } catch (e) {
+            saving = false;
+            return { success: false, action: 'submit_for_review', error: e instanceof Error ? e.message : 'Failed to submit' };
+        }
+    }
+
+    async function handleSwitchViewEditorAction(action: UIAction): Promise<ActionResult> {
+        viewMode = 'editor';
+        return { success: true, action: 'switch_view_editor', message: 'Switched to editor view' };
+    }
+
+    async function handleSwitchViewPreviewAction(action: UIAction): Promise<ActionResult> {
+        viewMode = 'preview';
+        return { success: true, action: 'switch_view_preview', message: 'Switched to preview view' };
+    }
+
+    async function handleSwitchViewResourcesAction(action: UIAction): Promise<ActionResult> {
+        viewMode = 'resources';
+        await loadResources();
+        return { success: true, action: 'switch_view_resources', message: 'Switched to resources view' };
+    }
+
+    async function handleOpenResourceModalAction(action: UIAction): Promise<ActionResult> {
+        // Switch to resources view which shows the resource editor
+        viewMode = 'resources';
+        await loadResources();
+        // The ResourceEditor component handles adding resources
+        return { success: true, action: 'open_resource_modal', message: 'Resources panel opened' };
+    }
+
+    async function handleBrowseResourcesAction(action: UIAction): Promise<ActionResult> {
+        viewMode = 'resources';
+        await loadResources();
+        return { success: true, action: 'browse_resources', message: 'Resources panel opened' };
+    }
+
+    async function handleArticleSubmittedAction(action: UIAction): Promise<ActionResult> {
+        // Article was submitted - navigate back to analyst hub
+        const articleTopic = article?.topic || getStoredTopic();
+        await goto(articleTopic ? `/analyst/${articleTopic}` : '/analyst');
+        return { success: true, action: 'article_submitted', message: 'Article submitted, returning to hub' };
+    }
+
     onMount(() => {
         loadArticle();
+
+        // Subscribe to editor content from the main chat
+        editorContentUnsubscribe = editorContentStore.subscribe(handleEditorContent);
+
+        // Register action handlers for this page
+        actionUnsubscribers.push(
+            actionStore.registerHandler('save_draft', handleSaveDraftAction),
+            actionStore.registerHandler('submit_for_review', handleSubmitForReviewAction),
+            actionStore.registerHandler('switch_view_editor', handleSwitchViewEditorAction),
+            actionStore.registerHandler('switch_view_preview', handleSwitchViewPreviewAction),
+            actionStore.registerHandler('switch_view_resources', handleSwitchViewResourcesAction),
+            actionStore.registerHandler('open_resource_modal', handleOpenResourceModalAction),
+            actionStore.registerHandler('browse_resources', handleBrowseResourcesAction),
+            actionStore.registerHandler('article_submitted', handleArticleSubmittedAction)
+        );
+    });
+
+    onDestroy(() => {
+        if (editorContentUnsubscribe) {
+            editorContentUnsubscribe();
+        }
+        // Unregister action handlers
+        actionUnsubscribers.forEach(unsub => unsub());
     });
 </script>
 

@@ -30,6 +30,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Build arguments for runtime environment variables
+ARG PUBLIC_API_URL
+ARG PUBLIC_LINKEDIN_CLIENT_ID
+ARG PUBLIC_LINKEDIN_REDIRECT_URI
+
 # Copy built application
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/package*.json ./
@@ -40,8 +45,11 @@ RUN npm install --omit=dev
 # Expose port
 EXPOSE 3000
 
-# Set environment variable for production
+# Set environment variables for runtime (needed for dynamic CSP)
 ENV NODE_ENV=production
+ENV PUBLIC_API_URL=$PUBLIC_API_URL
+ENV PUBLIC_LINKEDIN_CLIENT_ID=$PUBLIC_LINKEDIN_CLIENT_ID
+ENV PUBLIC_LINKEDIN_REDIRECT_URI=$PUBLIC_LINKEDIN_REDIRECT_URI
 
 # Run the application
 CMD ["node", "build"]

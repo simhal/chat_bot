@@ -450,3 +450,12 @@ Some features work across all topics:
 | **Global Search** | Searches published articles across all topics user can access |
 | **Chatbot** | Can answer questions spanning multiple topics |
 | **Admin Panel** | Shows all topics for global administrators |
+
+---
+
+## Related Documentation
+
+- [Authorization](./02-authorization_concept.md) - Permission system
+- [User Management](./04-user-management.md) - Group assignments
+- [Resources](./10-resources-concept.md) - Topic-based resource organization
+- [Multi-Agent Architecture](./08-multi-agent-architecture.md) - Topic-specific agents

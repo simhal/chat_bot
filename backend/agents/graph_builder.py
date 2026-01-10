@@ -1,14 +1,17 @@
 """LangGraph multi-agent system builder."""
 
 from typing import Literal, Dict
+import os
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from agents.state import AgentState
 from agents.router_agent import RouterAgent
-from agents.equity_agent import EquityAgent
-from agents.economist_agent import EconomistAgent
-from agents.fixed_income_agent import FixedIncomeAgent
+from agents.specialist_analysts import (
+    EquityAnalystAgent,
+    MacroAnalystAgent,
+    FixedIncomeAnalystAgent,
+)
 from conversation_memory import create_conversation_memory
 
 
@@ -16,32 +19,44 @@ class MultiAgentGraph:
     """
     Build and manage the multi-agent LangGraph.
     Implements supervisor pattern with conditional routing.
+
+    Note: This is a legacy graph builder. For new implementations, use
+    the AnalystAgent directly via agent_service.py.
     """
 
-    def __init__(self, user_id: int, custom_prompt: str = None):
+    def __init__(self, user_id: int, custom_prompt: str = None, db=None):
         """
         Initialize multi-agent graph.
 
         Args:
             user_id: User ID for conversation isolation
             custom_prompt: Optional user-specific custom prompt
+            db: Database session (required for new analyst agents)
         """
         self.user_id = user_id
         self.custom_prompt = custom_prompt
+        self.db = db
 
-        # Initialize LLM from chatbot_agent settings
-        from chatbot_agent import settings
+        # Initialize LLM from environment settings
         self.llm = ChatOpenAI(
-            model=settings.openai_model,
-            temperature=settings.agent_temperature,
-            api_key=settings.openai_api_key
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=float(os.getenv("AGENT_TEMPERATURE", "0.7")),
+            api_key=os.getenv("OPENAI_API_KEY", "")
         )
 
-        # Initialize agents
+        # Initialize router (still uses old pattern)
         self.router = RouterAgent(self.llm, custom_prompt)
-        self.equity_agent = EquityAgent(self.llm, custom_prompt)
-        self.economist_agent = EconomistAgent(self.llm, custom_prompt)
-        self.fixed_income_agent = FixedIncomeAgent(self.llm, custom_prompt)
+
+        # Initialize new specialist analyst agents
+        if db:
+            self.equity_agent = EquityAnalystAgent(llm=self.llm, db=db)
+            self.economist_agent = MacroAnalystAgent(llm=self.llm, db=db)
+            self.fixed_income_agent = FixedIncomeAnalystAgent(llm=self.llm, db=db)
+        else:
+            # Fallback: agents will fail if db operations are needed
+            self.equity_agent = None
+            self.economist_agent = None
+            self.fixed_income_agent = None
 
         # Build graph
         self.graph = self._build_graph()

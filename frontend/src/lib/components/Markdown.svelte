@@ -2,10 +2,13 @@
     import { marked } from 'marked';
     import DOMPurify from 'dompurify';
     import { getResourceContentUrl } from '$lib/api';
+    import { goto } from '$app/navigation';
+    import { onMount } from 'svelte';
 
     export let content: string;
 
     let renderedContent = '';
+    let containerEl: HTMLDivElement;
 
     // Configure marked for better rendering
     marked.setOptions({
@@ -15,34 +18,80 @@
 
     // Pre-process markdown to convert resource links to regular links with permanent URLs
     function preprocessResourceLinks(markdown: string): string {
-        // Pattern: [name](resource:hash_id)
+        // Pattern for iframe embeds: [!iframe name](resource:hash_id)
+        const iframePattern = /\[!iframe ([^\]]+)\]\(resource:([a-zA-Z0-9]+)\)/g;
+
+        // First, handle iframe embeds
+        let processed = markdown.replace(iframePattern, (match, name, hashId) => {
+            const contentUrl = getResourceContentUrl(hashId);
+            // Return an iframe embed with responsive container
+            return `<div class="resource-iframe-container">
+                <iframe src="${contentUrl}" title="${name}" loading="lazy" sandbox="allow-scripts allow-same-origin"></iframe>
+            </div>`;
+        });
+
+        // Pattern for regular resource links: [name](resource:hash_id)
         const resourcePattern = /\[([^\]]+)\]\(resource:([a-zA-Z0-9]+)\)/g;
 
-        return markdown.replace(resourcePattern, (match, name, hashId) => {
+        return processed.replace(resourcePattern, (match, name, hashId) => {
             // Convert to a regular markdown link with the permanent resource URL
             const contentUrl = getResourceContentUrl(hashId);
             return `[${name}](${contentUrl})`;
         });
     }
 
+    // Pre-process markdown to convert goto links to navigation buttons
+    function preprocessGotoLinks(markdown: string): string {
+        // Pattern: [button text](goto:/path)
+        const gotoPattern = /\[([^\]]+)\]\(goto:([^)]+)\)/g;
+
+        return markdown.replace(gotoPattern, (match, text, path) => {
+            // Convert to a styled button link with data attribute for path
+            return `<a href="${path}" class="goto-button" data-goto-path="${path}">${text}</a>`;
+        });
+    }
+
     function renderMarkdown(markdown: string): string {
         // Pre-process resource links
-        const processedMarkdown = preprocessResourceLinks(markdown);
+        let processedMarkdown = preprocessResourceLinks(markdown);
+        // Pre-process goto links
+        processedMarkdown = preprocessGotoLinks(processedMarkdown);
 
         // Parse markdown to HTML
         const html = marked.parse(processedMarkdown) as string;
 
         // Sanitize to prevent XSS - allow our custom attributes and elements
         return DOMPurify.sanitize(html, {
-            ADD_ATTR: ['data-hash-id', 'data-name', 'data-resource-type', 'target'],
+            ADD_ATTR: [
+                'data-hash-id', 'data-name', 'data-resource-type', 'target', 'data-goto-path',
+                // iframe attributes
+                'src', 'width', 'height', 'frameborder', 'allow', 'allowfullscreen',
+                'loading', 'referrerpolicy', 'sandbox', 'srcdoc', 'name', 'title'
+            ],
             ADD_TAGS: ['iframe']
         });
+    }
+
+    // Handle clicks on goto buttons
+    function handleClick(event: MouseEvent) {
+        const target = event.target as HTMLElement;
+        const gotoButton = target.closest('.goto-button') as HTMLAnchorElement;
+
+        if (gotoButton) {
+            event.preventDefault();
+            const path = gotoButton.dataset.gotoPath;
+            if (path) {
+                goto(path);
+            }
+        }
     }
 
     $: renderedContent = renderMarkdown(content);
 </script>
 
-<div class="markdown-content">
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="markdown-content" bind:this={containerEl} on:click={handleClick}>
     {@html renderedContent}
 </div>
 
@@ -369,5 +418,58 @@
 
     .markdown-content :global(.resource-html-link:hover) {
         text-decoration: underline;
+    }
+
+    /* Navigation goto buttons */
+    .markdown-content :global(.goto-button) {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        color: white !important;
+        text-decoration: none !important;
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+        margin: 0.25rem 0.25rem 0.25rem 0;
+    }
+
+    .markdown-content :global(.goto-button:hover) {
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        box-shadow: 0 4px 8px rgba(59, 130, 246, 0.4);
+        transform: translateY(-1px);
+        text-decoration: none !important;
+    }
+
+    .markdown-content :global(.goto-button:active) {
+        transform: translateY(0);
+        box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+    }
+
+    .markdown-content :global(.goto-button::before) {
+        content: '→';
+        font-size: 1rem;
+    }
+
+    /* Iframe container for embedded HTML resources */
+    .markdown-content :global(.resource-iframe-container) {
+        width: 100%;
+        margin: 1rem 0;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        background: #f8f9fa;
+    }
+
+    .markdown-content :global(.resource-iframe-container iframe) {
+        width: 100%;
+        height: 600px;
+        max-height: 80vh;
+        border: none;
+        display: block;
     }
 </style>

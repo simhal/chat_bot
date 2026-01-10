@@ -1,0 +1,48 @@
+%%{init: {'theme': 'base'}}%%
+flowchart TD
+    Start([User Message]) --> Router
+
+    subgraph MainGraph["Main Chat Graph"]
+        Router{Intent Router}
+
+        Router -->|Navigation| Nav[Navigation Handler]
+        Router -->|UI Action| UI[UI Action Handler]
+        Router -->|Content Gen| Analyst[Analyst SubGraph]
+        Router -->|Editor Work| Editor[Editor SubGraph]
+        Router -->|General| General[General Chat]
+        Router -->|Entitlements| Entitle[Entitlements Handler]
+    end
+
+    subgraph AnalystSubGraph["Analyst SubGraph"]
+        A_Start([Start]) --> A_Research[Research Phase]
+        A_Research --> A_Web[Web Search Agent]
+        A_Research --> A_Data[Data Download Agent]
+        A_Research --> A_Query[Article Query Agent]
+        A_Web --> A_Write[Write Article]
+        A_Data --> A_Write
+        A_Query --> A_Write
+        A_Write --> A_Save[Save Draft]
+    end
+
+    subgraph EditorSubGraph["Editor SubGraph"]
+        E_Start([Start]) --> E_Review[Review Article]
+        E_Review --> E_Decision{Decision}
+        E_Decision -->|Reject| E_Reject[Return to Draft]
+        E_Decision -->|Publish| E_HITL[HITL Interrupt]
+        E_HITL --> E_Confirm{Human Approval}
+        E_Confirm -->|Approve| E_Publish[Publish Article]
+        E_Confirm -->|Reject| E_Reject
+    end
+
+    Analyst --> AnalystSubGraph
+    Editor --> EditorSubGraph
+
+    Nav --> Response[Response Builder]
+    UI --> Response
+    General --> Response
+    Entitle --> Response
+    A_Save --> Response
+    E_Publish --> Response
+    E_Reject --> Response
+
+    Response --> End([Chat Response])
