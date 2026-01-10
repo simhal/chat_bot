@@ -58,7 +58,7 @@ class UserContextService:
                     PromptModule.id == db_user.chat_tonality_id
                 ).first()
                 if chat_tonality:
-                    chat_tonality_text = chat_tonality.prompt_text
+                    chat_tonality_text = chat_tonality.template_text
 
             # Load content tonality from user preferences
             if db_user.content_tonality_id:
@@ -67,7 +67,7 @@ class UserContextService:
                     PromptModule.id == db_user.content_tonality_id
                 ).first()
                 if content_tonality:
-                    content_tonality_text = content_tonality.prompt_text
+                    content_tonality_text = content_tonality.template_text
 
         # Extract scopes from JWT
         scopes = user.get("scopes", [])
@@ -130,7 +130,7 @@ class UserContextService:
                 PromptModule.id == user.chat_tonality_id
             ).first()
             if chat_tonality:
-                chat_tonality_text = chat_tonality.prompt_text
+                chat_tonality_text = chat_tonality.template_text
 
         if user.content_tonality_id:
             from models import PromptModule
@@ -138,7 +138,7 @@ class UserContextService:
                 PromptModule.id == user.content_tonality_id
             ).first()
             if content_tonality:
-                content_tonality_text = content_tonality.prompt_text
+                content_tonality_text = content_tonality.template_text
 
         return create_user_context(
             user_id=user.id,
