@@ -1,39 +1,146 @@
 import { writable, derived } from 'svelte/store';
+import sectionsConfig from '../../../../shared/sections.json';
 
-export type NavigationSection = 'home' | 'search' | 'analyst' | 'editor' | 'admin' | 'profile';
-export type NavigationRole = 'reader' | 'analyst' | 'editor' | 'admin';
+// =============================================================================
+// Types from Shared Configuration
+// =============================================================================
+
+// Extract section names from shared config
+export type SectionName = keyof typeof sectionsConfig.sections;
+
+// Section configuration type
+export interface SectionConfig {
+	name: string;
+	route: string;
+	required_role: string;
+	requires_topic: boolean;
+	requires_article: boolean;
+	ui_actions: string[];
+}
+
+// Export sections config for use in other modules
+export const SECTIONS: Record<SectionName, SectionConfig> = sectionsConfig.sections as Record<SectionName, SectionConfig>;
+
+// =============================================================================
+// Navigation Context
+// =============================================================================
 
 export interface NavigationContext {
-	section: NavigationSection;
+	// Section name from shared config (e.g., 'reader_topic', 'analyst_dashboard')
+	section: SectionName;
+	// Topic slug (for sections with requires_topic=true)
 	topic: string | null;
-	subNav: string | null;
+	// Article context (for sections with requires_article=true)
 	articleId: number | null;
 	articleHeadline: string | null;
 	articleKeywords: string | null;
 	articleStatus: string | null;  // draft, editor, published
-	role: NavigationRole;  // Current role based on navigation context
 	// Resource tracking
 	resourceId: number | null;
 	resourceName: string | null;
 	resourceType: string | null;
-	// View mode for pages with multiple views
-	viewMode: string | null;  // e.g., 'editor' | 'preview' | 'resources' for analyst edit
+	// View mode for pages with multiple views (e.g., editor/preview/resources)
+	viewMode: string | null;
 }
 
 const defaultContext: NavigationContext = {
 	section: 'home',
 	topic: null,
-	subNav: null,
 	articleId: null,
 	articleHeadline: null,
 	articleKeywords: null,
 	articleStatus: null,
-	role: 'reader',  // Default role is reader
 	resourceId: null,
 	resourceName: null,
 	resourceType: null,
 	viewMode: null
 };
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/**
+ * Get section configuration by name
+ */
+export function getSectionConfig(section: SectionName): SectionConfig | undefined {
+	return SECTIONS[section];
+}
+
+/**
+ * Get available UI actions for a section (from shared config)
+ */
+export function getSectionActions(section: SectionName): string[] {
+	const config = SECTIONS[section];
+	return config?.ui_actions || [];
+}
+
+/**
+ * Check if a section requires a topic parameter
+ */
+export function sectionRequiresTopic(section: SectionName): boolean {
+	return SECTIONS[section]?.requires_topic ?? false;
+}
+
+/**
+ * Check if a section requires an article parameter
+ */
+export function sectionRequiresArticle(section: SectionName): boolean {
+	return SECTIONS[section]?.requires_article ?? false;
+}
+
+/**
+ * Extract role from section name (e.g., 'analyst_dashboard' -> 'analyst')
+ */
+export function extractRoleFromSection(section: SectionName): string {
+	const prefix = section.split('_')[0];
+	const roleMap: Record<string, string> = {
+		reader: 'reader',
+		analyst: 'analyst',
+		editor: 'editor',
+		admin: 'admin',
+		root: 'admin',
+		user: 'reader',
+		home: 'reader'
+	};
+	return roleMap[prefix] || 'reader';
+}
+
+/**
+ * Build URL path from section and parameters
+ */
+export function buildSectionUrl(section: SectionName, topic?: string | null, articleId?: number | null): string {
+	const config = SECTIONS[section];
+	if (!config) return '/';
+
+	let path = config.route;
+
+	// Replace [topic] placeholder
+	if (path.includes('[topic]')) {
+		if (topic) {
+			path = path.replace('[topic]', topic);
+		} else {
+			// If topic is required but not provided, return base path
+			return path.split('/[topic]')[0] || '/';
+		}
+	}
+
+	// Replace [id] placeholder
+	if (path.includes('[id]')) {
+		if (articleId) {
+			path = path.replace('[id]', String(articleId));
+		} else {
+			// If article is required but not provided, return path without article
+			return path.split('/article/[id]')[0].replace('/edit/[id]', '') || '/';
+		}
+	}
+
+	return path;
+}
+
+// =============================================================================
+// Navigation Store
+// =============================================================================
 
 function createNavigationStore() {
 	const { subscribe, set, update } = writable<NavigationContext>(defaultContext);
@@ -44,9 +151,9 @@ function createNavigationStore() {
 		update,
 
 		/**
-		 * Set the current navigation section
+		 * Set the current section (from shared sections.json)
 		 */
-		setSection(section: NavigationSection) {
+		setSection(section: SectionName) {
 			update((ctx) => ({ ...ctx, section }));
 		},
 
@@ -84,10 +191,8 @@ function createNavigationStore() {
 		toggleArticle(articleId: number, headline: string | null = null, keywords: string | null = null, status: string | null = null) {
 			update((ctx) => {
 				if (ctx.articleId === articleId) {
-					// Same article - clear it
 					return { ...ctx, articleId: null, articleHeadline: null, articleKeywords: null, articleStatus: null };
 				} else {
-					// Different article - set it
 					return { ...ctx, articleId, articleHeadline: headline, articleKeywords: keywords, articleStatus: status };
 				}
 			});
@@ -108,13 +213,6 @@ function createNavigationStore() {
 		},
 
 		/**
-		 * Set sub-navigation (e.g., 'drafts', 'pending', 'latest')
-		 */
-		setSubNav(subNav: string | null) {
-			update((ctx) => ({ ...ctx, subNav }));
-		},
-
-		/**
 		 * Update multiple context properties at once
 		 */
 		setContext(partial: Partial<NavigationContext>) {
@@ -132,6 +230,10 @@ function createNavigationStore() {
 
 export const navigationContext = createNavigationStore();
 
+// =============================================================================
+// Derived Stores
+// =============================================================================
+
 /**
  * Derived store for agent label display
  */
@@ -140,102 +242,81 @@ export const agentLabel = derived(navigationContext, ($ctx) => {
 		? $ctx.topic.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 		: null;
 
-	switch ($ctx.section) {
-		case 'analyst':
-			if ($ctx.articleId) {
-				return `Content Agent: Editing Article #${$ctx.articleId}`;
-			}
-			return `Analyst Agent${topicDisplay ? `: ${topicDisplay}` : ''}`;
+	const sectionConfig = SECTIONS[$ctx.section];
+	const sectionName = sectionConfig?.name || 'Chat';
 
-		case 'editor':
-			if ($ctx.articleId) {
-				return `Editor Agent: Reviewing Article #${$ctx.articleId}`;
-			}
-			return `Editor Agent${topicDisplay ? `: ${topicDisplay}` : ''}`;
-
-		case 'admin':
-			return 'Admin Assistant';
-
-		case 'search':
-			return 'Search Assistant';
-
-		case 'profile':
-			return 'Profile Assistant';
-
-		case 'home':
-		default:
-			return `Main Chat Agent${topicDisplay ? ` (${topicDisplay})` : ''}`;
+	// Build contextual label based on section
+	if ($ctx.section.startsWith('analyst')) {
+		if ($ctx.articleId) {
+			return `Content Agent: Editing Article #${$ctx.articleId}`;
+		}
+		return `Analyst Agent${topicDisplay ? `: ${topicDisplay}` : ''}`;
 	}
+
+	if ($ctx.section.startsWith('editor')) {
+		if ($ctx.articleId) {
+			return `Editor Agent: Reviewing Article #${$ctx.articleId}`;
+		}
+		return `Editor Agent${topicDisplay ? `: ${topicDisplay}` : ''}`;
+	}
+
+	if ($ctx.section.startsWith('admin') || $ctx.section.startsWith('root')) {
+		return 'Admin Assistant';
+	}
+
+	if ($ctx.section === 'reader_search') {
+		return 'Search Assistant';
+	}
+
+	if ($ctx.section.startsWith('user')) {
+		return 'Profile Assistant';
+	}
+
+	return `Main Chat Agent${topicDisplay ? ` (${topicDisplay})` : ''}`;
 });
 
 /**
  * Derived store for navigation context display in chat panel.
- * Shows role, topic, and navigation path.
  */
 export interface NavigationDisplayInfo {
 	role: string;           // Human-readable role
 	roleClass: string;      // CSS class for styling
 	topic: string | null;   // Human-readable topic
-	path: string;           // Navigation path like /analyst/{topic}/edit/{id}
+	path: string;           // Current URL path
+	sectionName: string;    // Human-readable section name
 }
 
 export const navigationDisplayInfo = derived(navigationContext, ($ctx): NavigationDisplayInfo => {
-	// Format role for display
-	const roleLabels: Record<NavigationRole, string> = {
+	const role = extractRoleFromSection($ctx.section);
+	const roleLabels: Record<string, string> = {
 		reader: 'Reader',
 		analyst: 'Analyst',
 		editor: 'Editor',
 		admin: 'Admin'
 	};
 
-	// Format topic for display
 	const topicDisplay = $ctx.topic
 		? $ctx.topic.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 		: null;
 
-	// Build navigation path
-	let path = '/';
-	switch ($ctx.section) {
-		case 'home':
-			path = $ctx.topic ? `/?tab=${$ctx.topic}` : '/';
-			break;
-		case 'search':
-			path = '/?tab=search';
-			break;
-		case 'analyst':
-			if ($ctx.articleId) {
-				path = `/analyst/edit/${$ctx.articleId}`;
-			} else if ($ctx.topic) {
-				path = `/analyst/${$ctx.topic}`;
-			} else {
-				path = '/analyst';
-			}
-			break;
-		case 'editor':
-			if ($ctx.topic) {
-				path = `/editor/${$ctx.topic}`;
-			} else {
-				path = '/editor';
-			}
-			break;
-		case 'admin':
-			path = $ctx.subNav ? `/admin/${$ctx.subNav}` : '/admin';
-			break;
-		case 'profile':
-			path = $ctx.subNav ? `/profile?tab=${$ctx.subNav}` : '/profile';
-			break;
-	}
+	const sectionConfig = SECTIONS[$ctx.section];
+	const path = buildSectionUrl($ctx.section, $ctx.topic, $ctx.articleId);
 
 	return {
-		role: roleLabels[$ctx.role],
-		roleClass: $ctx.role,
+		role: roleLabels[role] || 'Reader',
+		roleClass: role,
 		topic: topicDisplay,
-		path
+		path,
+		sectionName: sectionConfig?.name || 'Home'
 	};
 });
 
+// =============================================================================
+// API Integration
+// =============================================================================
+
 /**
- * Get context for API requests
+ * Get context for API requests (snake_case for backend)
  */
 export function getNavigationContextForAPI(ctx: NavigationContext): {
 	section: string;
@@ -244,8 +325,6 @@ export function getNavigationContextForAPI(ctx: NavigationContext): {
 	article_headline: string | null;
 	article_keywords: string | null;
 	article_status: string | null;
-	sub_nav: string | null;
-	role: string;
 	resource_id: number | null;
 	resource_name: string | null;
 	resource_type: string | null;
@@ -258,8 +337,6 @@ export function getNavigationContextForAPI(ctx: NavigationContext): {
 		article_headline: ctx.articleHeadline,
 		article_keywords: ctx.articleKeywords,
 		article_status: ctx.articleStatus,
-		sub_nav: ctx.subNav,
-		role: ctx.role,
 		resource_id: ctx.resourceId,
 		resource_name: ctx.resourceName,
 		resource_type: ctx.resourceType,
@@ -267,10 +344,10 @@ export function getNavigationContextForAPI(ctx: NavigationContext): {
 	};
 }
 
-/**
- * Editor content store for passing generated content from chat to editor pages.
- * The chat agent can generate article content which should fill the editor fields.
- */
+// =============================================================================
+// Editor Content Store
+// =============================================================================
+
 export interface LinkedResource {
 	resource_id: number;
 	name: string;
@@ -279,26 +356,24 @@ export interface LinkedResource {
 	already_linked?: boolean;
 }
 
+export type EditorContentAction = 'fill' | 'append' | 'replace' | 'update_headline' | 'update_keywords' | 'update_content';
+
 export interface EditorContentPayload {
 	headline?: string;
 	content?: string;
 	keywords?: string;
-	action: 'fill' | 'append' | 'replace';
+	action: EditorContentAction;
 	linked_resources?: LinkedResource[];
 	article_id?: number;
-	timestamp: number;  // To detect new content
+	timestamp: number;
 }
 
 function createEditorContentStore() {
-	const { subscribe, set, update } = writable<EditorContentPayload | null>(null);
+	const { subscribe, set } = writable<EditorContentPayload | null>(null);
 
 	return {
 		subscribe,
 
-		/**
-		 * Set new editor content from chat response.
-		 * The editor page will react to this and fill the fields.
-		 */
 		setContent(content: {
 			headline?: string;
 			content?: string;
@@ -307,20 +382,23 @@ function createEditorContentStore() {
 			linked_resources?: LinkedResource[];
 			article_id?: number;
 		}) {
+			// Validate action type
+			const validActions: EditorContentAction[] = ['fill', 'append', 'replace', 'update_headline', 'update_keywords', 'update_content'];
+			const action = validActions.includes(content.action as EditorContentAction)
+				? (content.action as EditorContentAction)
+				: 'fill';
+
 			set({
 				headline: content.headline,
 				content: content.content,
 				keywords: content.keywords,
-				action: (content.action as 'fill' | 'append' | 'replace') || 'fill',
+				action,
 				linked_resources: content.linked_resources,
 				article_id: content.article_id,
 				timestamp: Date.now()
 			});
 		},
 
-		/**
-		 * Clear the content after it's been consumed by the editor.
-		 */
 		clear() {
 			set(null);
 		}

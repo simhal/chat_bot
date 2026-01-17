@@ -414,14 +414,33 @@
             if (payload.keywords) editKeywords = payload.keywords;
         } else if (payload.action === 'append') {
             if (payload.content) editContent += '\n\n' + payload.content;
+        } else if (payload.action === 'update_headline') {
+            if (payload.headline) editHeadline = payload.headline;
+        } else if (payload.action === 'update_keywords') {
+            if (payload.keywords) editKeywords = payload.keywords;
+        } else if (payload.action === 'update_content') {
+            if (payload.content) editContent = payload.content;
         }
 
         // Check if new resources were linked
         const linkedResources = payload.linked_resources || [];
         const newlyLinked = linkedResources.filter(r => !r.already_linked);
 
-        // Build message with resource info
-        let message = 'Content has been generated and filled into the editor fields.';
+        // Build message based on what was updated
+        let message = '';
+        if (payload.action === 'fill' || payload.action === 'replace') {
+            message = 'Content has been generated and filled into the editor fields.';
+        } else if (payload.action === 'update_headline') {
+            message = 'Headline has been updated.';
+        } else if (payload.action === 'update_keywords') {
+            message = 'Keywords have been updated.';
+        } else if (payload.action === 'update_content') {
+            message = 'Content has been updated.';
+        } else if (payload.action === 'append') {
+            message = 'Content has been appended.';
+        } else {
+            message = 'Content has been updated.';
+        }
         if (newlyLinked.length > 0) {
             message += `\n\n${newlyLinked.length} resource(s) have been linked to this article:`;
             for (const r of newlyLinked) {

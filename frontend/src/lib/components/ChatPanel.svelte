@@ -274,6 +274,45 @@
 				// Navigate back to analyst hub to see the rejected article
 				goto(topic ? `/analyst/${topic}` : '/analyst');
 				return true;
+			// Unified goto action - parse params.section
+			case 'goto':
+				const section = uiAction.params?.section;
+				console.log('🧭 Fallback navigation: goto ->', section, topic);
+				if (section) {
+					// Map section names to routes
+					const sectionRoutes: Record<string, string> = {
+						'home': '/',
+						'reader_search': '/reader/search',
+						'reader_topic': topic ? `/reader/${topic}` : '/',
+						'user_profile': '/user/profile',
+						'user_settings': '/user/settings',
+						'analyst_dashboard': topic ? `/analyst/${topic}` : '/analyst',
+						'analyst_editor': articleId ? `/analyst/edit/${articleId}` : '/analyst',
+						'editor_dashboard': topic ? `/editor/${topic}` : '/editor',
+						'admin_articles': topic ? `/admin/${topic}/articles` : '/admin',
+						'admin_resources': topic ? `/admin/${topic}/resources` : '/admin',
+						'admin_prompts': topic ? `/admin/${topic}/prompts` : '/admin',
+						'root_users': '/root/users',
+						'root_groups': '/root/groups',
+						'root_topics': '/root/topics',
+						'root_prompts': '/root/prompts',
+						'root_tonalities': '/root/tonalities',
+						'root_resources': '/root/resources',
+					};
+					const route = sectionRoutes[section] || '/';
+					goto(route);
+					return true;
+				}
+				return false;
+			// Go back action
+			case 'goto_back':
+				console.log('🧭 Fallback navigation: goto_back');
+				if (typeof window !== 'undefined' && window.history.length > 1) {
+					window.history.back();
+				} else {
+					goto('/');
+				}
+				return true;
 			// Navigation actions (goto_*)
 			case 'goto_home':
 				console.log('🧭 Fallback navigation: goto_home ->', topic);
