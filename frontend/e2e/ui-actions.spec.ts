@@ -287,10 +287,11 @@ test.describe('Global Goto Action - Navigation', () => {
 	});
 });
 
-test.describe.fixme('Global Goto Back Action - Via Chat', () => {
-	// TODO: These tests require the dev server to be running with latest ChatPanel changes
+// NOTE: These tests need the chat-message-assistant response to appear, but the mock API
+// isn't returning responses that get rendered in the main ChatPanel. Need to investigate
+// how the chat response flow works with the mocked API.
+test.describe.skip('Global Goto Back Action - Via Chat', () => {
 	// goto_back is handled by ChatPanel fallback handler when triggered via chat responses
-	// The functionality works but tests need the data-testid attributes to be built
 
 	test('goto_back via chat should navigate using browser history', async ({ page }) => {
 		await loginAsReader(page);
@@ -616,15 +617,19 @@ test.describe('All Actions Coverage', () => {
 // is properly transferred from chat responses to editor text fields.
 // This functionality uses the editorContentStore and the analyst/edit page handlers.
 //
-// TODO: These tests require the dev server to be rebuilt with data-testid attributes.
-// The functionality is also tested in chat-content-editing.spec.ts using mock fixtures.
-// Enable these tests after confirming data-testid attributes are deployed.
-
-test.describe.fixme('Editor Content Transfer - Headline', () => {
+// NOTE: Editor page has its own in-page chat interface (Content Agent Assistant) that
+// uses /api/analyst/{topic}/article/{id}/chat, separate from the main ChatPanel.
+// These tests need refactoring to use the correct chat interface.
+// For now, content transfer is tested via chat-content-editing.spec.ts
+test.describe.skip('Editor Content Transfer - Headline', () => {
 	test.beforeEach(async ({ page }) => {
 		await loginAsAnalyst(page);
+		// Set topic in localStorage (required by editor page)
+		await page.evaluate(() => {
+			localStorage.setItem('selected_topic', 'macro');
+		});
 		// Mock article API
-		await page.route('**/api/articles/*', async (route) => {
+		await page.route('**/api/analyst/*/article/*', async (route) => {
 			if (route.request().method() === 'GET') {
 				await route.fulfill({
 					status: 200,
@@ -642,51 +647,46 @@ test.describe.fixme('Editor Content Transfer - Headline', () => {
 				await route.continue();
 			}
 		});
+		// Mock resources APIs (required for page to finish loading)
+		await page.route('**/api/resources/**', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({ resources: [] })
+			});
+		});
 	});
 
 	test('update_headline action should populate headline field', async ({ page }) => {
-		// Mock chat API to return update_headline action
-		await page.route('**/api/chat**', async (route) => {
-			if (route.request().method() === 'POST') {
-				await route.fulfill({
-					status: 200,
-					contentType: 'application/json',
-					body: JSON.stringify({
-						response_text: 'Here is a new headline:\n\n**New AI Generated Headline**',
-						editor_content: {
-							headline: 'New AI Generated Headline',
-							action: 'update_headline',
-							timestamp: new Date().toISOString()
-						},
-						conversation_id: 'test'
-					})
-				});
-			} else {
-				await route.fulfill({
-					status: 200,
-					contentType: 'application/json',
-					body: JSON.stringify({ messages: [] })
-				});
-			}
+		// Mock the in-page analyst chat API (editor page uses its own chat endpoint)
+		await page.route('**/api/analyst/*/article/*/chat', async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: 'application/json',
+				body: JSON.stringify({
+					response: 'Here is a new headline:\n\n**New AI Generated Headline**',
+					headline: 'New AI Generated Headline',
+					action: 'update_headline'
+				})
+			});
 		});
 
 		await page.goto('/analyst/edit/123');
-		await page.waitForSelector('[data-testid="chat-panel"]', { state: 'visible', timeout: 5000 });
-		await page.waitForSelector('[data-testid="chat-input"]', { state: 'visible', timeout: 5000 });
+		// Wait for editor to fully load
+		await page.waitForSelector('[data-testid="editor-headline"]', { state: 'visible', timeout: 10000 });
 
-		// Send message requesting new headline
-		await page.fill('[data-testid="chat-input"]', 'give me a better headline');
-		await page.press('[data-testid="chat-input"]', 'Enter');
-		await page.waitForSelector('[data-testid="chat-message-assistant"]', { timeout: 10000 });
-
-		// Wait for content transfer
-		await page.waitForTimeout(1000);
+		// Use the in-page agent chat (not the main chat panel)
+		const agentInput = page.locator('.agent-chat-panel textarea, .agent-input textarea');
+		if (await agentInput.isVisible()) {
+			await agentInput.fill('give me a better headline');
+			await agentInput.press('Enter');
+			// Wait for response to be processed
+			await page.waitForTimeout(2000);
+		}
 
 		// Verify headline field was updated
-		const headlineInput = page.locator('[data-testid="editor-headline"], input[name="headline"], #headline');
-		if (await headlineInput.isVisible()) {
-			await expect(headlineInput).toHaveValue('New AI Generated Headline');
-		}
+		const headlineInput = page.locator('[data-testid="editor-headline"]');
+		await expect(headlineInput).toHaveValue('New AI Generated Headline');
 	});
 
 	test('update_headline should not affect keywords or content', async ({ page }) => {
@@ -738,10 +738,14 @@ test.describe.fixme('Editor Content Transfer - Headline', () => {
 	});
 });
 
-test.describe.fixme('Editor Content Transfer - Keywords', () => {
+test.describe.skip('Editor Content Transfer - Keywords', () => {
 	test.beforeEach(async ({ page }) => {
 		await loginAsAnalyst(page);
-		await page.route('**/api/articles/*', async (route) => {
+		// Set topic in localStorage (required by editor page)
+		await page.evaluate(() => {
+			localStorage.setItem('selected_topic', 'macro');
+		});
+		await page.route('**/api/analyst/*/article/*', async (route) => {
 			if (route.request().method() === 'GET') {
 				await route.fulfill({
 					status: 200,
@@ -851,10 +855,14 @@ test.describe.fixme('Editor Content Transfer - Keywords', () => {
 	});
 });
 
-test.describe.fixme('Editor Content Transfer - Content', () => {
+test.describe.skip('Editor Content Transfer - Content', () => {
 	test.beforeEach(async ({ page }) => {
 		await loginAsAnalyst(page);
-		await page.route('**/api/articles/*', async (route) => {
+		// Set topic in localStorage (required by editor page)
+		await page.evaluate(() => {
+			localStorage.setItem('selected_topic', 'macro');
+		});
+		await page.route('**/api/analyst/*/article/*', async (route) => {
 			if (route.request().method() === 'GET') {
 				await route.fulfill({
 					status: 200,
@@ -976,10 +984,14 @@ test.describe.fixme('Editor Content Transfer - Content', () => {
 	});
 });
 
-test.describe.fixme('Editor Content Transfer - Fill Action (All Fields)', () => {
+test.describe.skip('Editor Content Transfer - Fill Action (All Fields)', () => {
 	test.beforeEach(async ({ page }) => {
 		await loginAsAnalyst(page);
-		await page.route('**/api/articles/*', async (route) => {
+		// Set topic in localStorage (required by editor page)
+		await page.evaluate(() => {
+			localStorage.setItem('selected_topic', 'macro');
+		});
+		await page.route('**/api/analyst/*/article/*', async (route) => {
 			if (route.request().method() === 'GET') {
 				await route.fulfill({
 					status: 200,
@@ -1099,10 +1111,14 @@ test.describe.fixme('Editor Content Transfer - Fill Action (All Fields)', () => 
 	});
 });
 
-test.describe.fixme('Editor Content Transfer - Sequential Updates', () => {
+test.describe.skip('Editor Content Transfer - Sequential Updates', () => {
 	test.beforeEach(async ({ page }) => {
 		await loginAsAnalyst(page);
-		await page.route('**/api/articles/*', async (route) => {
+		// Set topic in localStorage (required by editor page)
+		await page.evaluate(() => {
+			localStorage.setItem('selected_topic', 'macro');
+		});
+		await page.route('**/api/analyst/*/article/*', async (route) => {
 			if (route.request().method() === 'GET') {
 				await route.fulfill({
 					status: 200,
