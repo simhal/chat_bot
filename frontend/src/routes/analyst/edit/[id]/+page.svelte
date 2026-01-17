@@ -724,13 +724,13 @@
         </div>
 
         <!-- Fixed Chat Panel -->
-        <div class="chat-panel">
+        <div class="chat-panel" data-testid="editor-chat-panel">
             <div class="chat-header">
                 <h4>Content Agent Assistant</h4>
                 <span class="chat-hint">Ask the agent to modify the article</span>
             </div>
 
-            <div class="chat-messages">
+            <div class="chat-messages" data-testid="editor-chat-messages">
                 {#if chatMessages.length === 0}
                     <div class="chat-empty">
                         <p class="chat-welcome">Content Agent Assistant</p>
@@ -745,7 +745,7 @@
                     </div>
                 {:else}
                     {#each chatMessages as msg}
-                        <div class="chat-message" class:user={msg.role === 'user'} class:agent={msg.role === 'agent'}>
+                        <div class="chat-message" class:user={msg.role === 'user'} class:agent={msg.role === 'agent'} data-testid="editor-chat-message-{msg.role}">
                             <div class="message-header">
                                 <span class="message-role">{msg.role === 'user' ? 'You' : 'Agent'}</span>
                                 <span class="message-time">{formatTime(msg.timestamp)}</span>
@@ -755,7 +755,7 @@
                     {/each}
                 {/if}
                 {#if chatLoading}
-                    <div class="chat-message agent loading">
+                    <div class="chat-message agent loading" data-testid="editor-chat-loading">
                         <div class="message-content">
                             <div class="typing-indicator">
                                 <span></span>
@@ -773,8 +773,9 @@
                     bind:value={chatInput}
                     placeholder="e.g., 'Make the introduction more engaging' or 'Add statistics about this topic'"
                     disabled={chatLoading}
+                    data-testid="editor-chat-input"
                 />
-                <button type="submit" disabled={!chatInput.trim() || chatLoading}>
+                <button type="submit" disabled={!chatInput.trim() || chatLoading} data-testid="editor-chat-send">
                     Send
                 </button>
             </form>
