@@ -648,6 +648,7 @@
                             bind:value={editHeadline}
                             placeholder="Article headline"
                             maxlength="500"
+                            data-testid="editor-headline"
                         />
                     </div>
 
@@ -659,6 +660,7 @@
                             bind:value={editKeywords}
                             placeholder="keyword1, keyword2, keyword3"
                             maxlength="500"
+                            data-testid="editor-keywords"
                         />
                     </div>
 
@@ -673,6 +675,7 @@
                             placeholder="Article content in Markdown format..."
                             on:drop={handleContentDrop}
                             on:dragover={handleContentDragOver}
+                            data-testid="editor-content"
                         ></textarea>
                     </div>
                 </div>

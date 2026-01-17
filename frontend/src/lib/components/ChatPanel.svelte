@@ -449,7 +449,7 @@
 	}
 </script>
 
-<div class="chat-panel">
+<div class="chat-panel" data-testid="chat-panel">
 	<!-- Context Bar -->
 	<div class="context-bar">
 		<div class="context-info">
@@ -511,7 +511,7 @@
 			</div>
 		{:else}
 			{#each messages as message}
-				<div class="message {message.role}">
+				<div class="message {message.role}" data-testid="chat-message-{message.role}">
 					<div class="message-content">
 						{#if message.role === 'assistant'}
 							<Markdown content={message.content} />
@@ -573,6 +573,7 @@
 				placeholder="Type your message..."
 				rows="1"
 				disabled={loading || !$auth.isAuthenticated}
+				data-testid="chat-input"
 			></textarea>
 			<button
 				class="send-btn"
