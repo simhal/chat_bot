@@ -277,32 +277,39 @@
 			// Navigation actions (goto_*)
 			case 'goto_home':
 				console.log('🧭 Fallback navigation: goto_home ->', topic);
-				goto(topic ? `/?tab=${topic}` : '/');
-				return true;
-			case 'goto_analyst':
-				console.log('🧭 Fallback navigation: goto_analyst ->', topic);
-				goto(topic ? `/analyst/${topic}` : '/analyst');
-				return true;
-			case 'goto_editor':
-				console.log('🧭 Fallback navigation: goto_editor ->', topic);
-				goto(topic ? `/editor/${topic}` : '/editor');
-				return true;
-			case 'goto_topic_admin':
-				console.log('🧭 Fallback navigation: goto_topic_admin');
-				goto('/admin');
-				return true;
-			case 'goto_admin_global':
-				console.log('🧭 Fallback navigation: goto_admin_global');
-				goto('/admin/global');
-				return true;
-			case 'goto_profile':
-				console.log('🧭 Fallback navigation: goto_profile');
-				goto('/profile');
+				goto('/');
 				return true;
 			case 'goto_search':
 				console.log('🧭 Fallback navigation: goto_search ->', topic);
-				// Navigate to home with search tab or trigger search modal
-				goto(topic ? `/?tab=${topic}&search=true` : '/?search=true');
+				goto('/reader/search');
+				return true;
+			case 'goto_reader_topic':
+				console.log('🧭 Fallback navigation: goto_reader_topic ->', topic);
+				goto(topic ? `/reader/${topic}` : '/');
+				return true;
+			case 'goto_analyst_topic':
+				console.log('🧭 Fallback navigation: goto_analyst_topic ->', topic);
+				goto(topic ? `/analyst/${topic}` : '/analyst');
+				return true;
+			case 'goto_editor_topic':
+				console.log('🧭 Fallback navigation: goto_editor_topic ->', topic);
+				goto(topic ? `/editor/${topic}` : '/editor');
+				return true;
+			case 'goto_admin_topic':
+				console.log('🧭 Fallback navigation: goto_admin_topic ->', topic);
+				goto(topic ? `/admin/${topic}` : '/admin');
+				return true;
+			case 'goto_root':
+				console.log('🧭 Fallback navigation: goto_root');
+				goto('/root/users');
+				return true;
+			case 'goto_user_profile':
+				console.log('🧭 Fallback navigation: goto_user_profile');
+				goto('/user/profile');
+				return true;
+			case 'goto_user_settings':
+				console.log('🧭 Fallback navigation: goto_user_settings');
+				goto('/user/settings');
 				return true;
 		}
 		return false;

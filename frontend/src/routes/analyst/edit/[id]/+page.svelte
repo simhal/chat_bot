@@ -66,7 +66,7 @@
     let allGlobalResources: Resource[] = [];  // All global resources (for categorization)
     let resourcesLoading = false;
 
-    $: articleId = parseInt($page.params.id);
+    $: articleId = parseInt($page.params.id || '0');
 
     // Check if user can edit this topic
     function canEditTopic(topic: string): boolean {
@@ -92,6 +92,11 @@
             }
 
             article = await getAnalystArticle(storedTopic, articleId);
+
+            if (!article) {
+                error = 'Article not found';
+                return;
+            }
 
             if (!canEditTopic(article.topic)) {
                 error = 'You do not have permission to edit this article';
@@ -556,12 +561,12 @@
         <div class="error-screen">
             <h2>Error</h2>
             <p>{error}</p>
-            <button on:click={() => goto('/admin/content')}>Back to Content Management</button>
+            <button on:click={() => goto('/')}>Back to Home</button>
         </div>
     {:else if article}
         <header class="editor-header">
             <div class="header-left">
-                <button class="back-btn" on:click={() => goto(`/analyst/${article.topic}`)}>
+                <button class="back-btn" on:click={() => article && goto(`/analyst/${article.topic}`)}>
                     ← Back to {article.topic.replace('_', ' ').toUpperCase()}
                 </button>
                 <div class="article-info">

@@ -130,7 +130,9 @@
             selectedArticle = await getArticle(article.topic, article.id);
 
             // Update navigation context with article focus
-            navigationContext.setArticle(selectedArticle.id, selectedArticle.headline, selectedArticle.keywords, 'published');
+            if (selectedArticle) {
+                navigationContext.setArticle(selectedArticle.id, selectedArticle.headline, selectedArticle.keywords, 'published');
+            }
 
             // Fetch publication resources for published articles
             try {
@@ -153,8 +155,10 @@
         if (updateUrl && browser) {
             if (tab === 'home') {
                 goto('/', { replaceState: true, noScroll: true });
+            } else if (tab === 'search') {
+                goto('/reader/search', { replaceState: true, noScroll: true });
             } else {
-                goto(`/?tab=${tab}`, { replaceState: true, noScroll: true });
+                goto(`/reader/${tab}`, { replaceState: true, noScroll: true });
             }
         }
 
@@ -695,7 +699,7 @@
                                     <button class="back-btn" on:click={() => { selectedArticle = null; navigationContext.clearArticle(); }}>
                                         Back to search results
                                     </button>
-                                    <button class="download-pdf-btn" on:click={() => handleDownloadPDF(selectedArticle.topic, selectedArticle.id)}>
+                                    <button class="download-pdf-btn" on:click={() => selectedArticle && handleDownloadPDF(selectedArticle.topic, selectedArticle.id)}>
                                         Download PDF
                                     </button>
                                 </div>
@@ -916,7 +920,7 @@
         <div class="modal large" on:click|stopPropagation>
             <!-- Minimal header with close and rate buttons (popup has its own Back/Download) -->
             <div class="modal-header-minimal">
-                <button class="rate-btn" on:click={() => openRatingModal(selectedArticle)}>
+                <button class="rate-btn" on:click={() => selectedArticle && openRatingModal(selectedArticle)}>
                     Rate Article
                 </button>
                 <button class="close-btn" on:click={() => { selectedArticle = null; selectedArticleResources = null; navigationContext.clearArticle(); }}>×</button>

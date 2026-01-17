@@ -84,8 +84,8 @@
     $: accessibleTopics = topics;
 
     // Check if user has any analyst/editor access
-    $: hasAnyAnalystAccess = (userScopes, topics.some(t => hasAnalystAccess(t.id)));
-    $: hasAnyEditorAccess = (userScopes, topics.some(t => hasEditorAccess(t.id)));
+    $: hasAnyAnalystAccess = userScopes.length >= 0 && topics.some(t => hasAnalystAccess(t.id));
+    $: hasAnyEditorAccess = userScopes.length >= 0 && topics.some(t => hasEditorAccess(t.id));
 
     // Check if user has topic admin access (for any topic)
     function hasTopicAdminAccess(topic: string): boolean {
@@ -93,7 +93,7 @@
         if ($auth.user.scopes.includes('global:admin')) return true;
         return $auth.user.scopes.includes(`${topic}:admin`);
     }
-    $: hasAnyTopicAdminAccess = (userScopes, topics.some(t => hasTopicAdminAccess(t.id)));
+    $: hasAnyTopicAdminAccess = userScopes.length >= 0 && topics.some(t => hasTopicAdminAccess(t.id));
 
     // Check if user has global admin access
     $: isGlobalAdmin = userScopes.includes('global:admin');
@@ -103,8 +103,8 @@
     $: isHome = currentPath === '/';
     $: isAnalyst = currentPath.startsWith('/analyst');
     $: isEditor = currentPath.startsWith('/editor');
-    $: isTopicAdmin = currentPath === '/admin' || (currentPath.startsWith('/admin') && !currentPath.startsWith('/admin/global'));
-    $: isGlobalAdminPage = currentPath.startsWith('/admin/global');
+    $: isTopicAdmin = currentPath === '/admin' || (currentPath.startsWith('/admin') && !currentPath.startsWith('/root'));
+    $: isGlobalAdminPage = currentPath.startsWith('/root');
     $: isProfile = currentPath.startsWith('/profile');
     // Get active topic from query param on home page
     $: activeTopic = isHome ? $page.url.searchParams.get('tab') : null;
@@ -132,7 +132,7 @@
         if (activeTopic === topicId) {
             // Already active - toggle off (go to search view)
             event.preventDefault();
-            goto('/?tab=search');
+            goto('/reader/search');
         }
         // Otherwise, let the normal <a> navigation happen
     }
@@ -151,10 +151,10 @@
         <nav class="header-nav">
             <!-- Topic tabs on the left (Chat removed - now always visible in split pane) -->
             <div class="topic-nav">
-                <a href="/?tab=search" class="nav-link topic-link" class:active={isHome && activeTopic === 'search'}>Search</a>
+                <a href="/reader/search" class="nav-link topic-link" class:active={isHome && activeTopic === 'search'}>Search</a>
                 {#each accessibleTopics as topic}
                     <a
-                        href="/?tab={topic.id}"
+                        href="/reader/{topic.id}"
                         class="nav-link topic-link"
                         class:active={isHome && activeTopic === topic.id}
                         on:click={(e) => handleTopicClick(e, topic.id)}
@@ -174,7 +174,7 @@
                     <a href="/admin" class="nav-link function-link" class:active={isTopicAdmin}>Topic Admin</a>
                 {/if}
                 {#if isGlobalAdmin}
-                    <a href="/admin/global" class="nav-link function-link" class:active={isGlobalAdminPage}>Global Admin</a>
+                    <a href="/root" class="nav-link function-link" class:active={isGlobalAdminPage}>Global Admin</a>
                 {/if}
                 <a href="/profile" class="nav-link function-link" class:active={isProfile}>Profile</a>
             </div>

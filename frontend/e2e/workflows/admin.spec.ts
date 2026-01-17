@@ -48,19 +48,19 @@ test.describe('5.1 Access Admin Content Management', () => {
 	});
 
 	test('should load admin content panel', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		await expect(page.locator('[data-testid="admin-content-panel"]')).toBeVisible();
 	});
 
 	test('should have topic filter', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		await expect(page.locator('[data-testid="topic-filter"]')).toBeVisible();
 	});
 
 	test('should show all article statuses', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		// Status filter should have all options
 		const statusFilter = page.locator('[data-testid="status-filter"]');
@@ -79,13 +79,13 @@ test.describe('5.2 View All Articles', () => {
 	});
 
 	test('should display all articles regardless of status', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		await expect(page.locator('[data-testid="admin-article-list"]')).toBeVisible();
 	});
 
 	test('should filter by status', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const statusFilter = page.locator('[data-testid="status-filter"]');
 		if (await statusFilter.isVisible()) {
@@ -104,7 +104,7 @@ test.describe('5.3 Edit Any Article', () => {
 	});
 
 	test('should open edit for any article', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const editBtn = page.locator('[data-testid="admin-edit-btn"]').first();
 		if (await editBtn.isVisible()) {
@@ -114,7 +114,7 @@ test.describe('5.3 Edit Any Article', () => {
 	});
 
 	test('should allow editing author/editor fields', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const editBtn = page.locator('[data-testid="admin-edit-btn"]').first();
 		if (await editBtn.isVisible()) {
@@ -132,13 +132,13 @@ test.describe('5.4 Reorder Articles', () => {
 	});
 
 	test('should have reorder controls', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		await expect(page.locator('[data-testid="reorder-mode"]')).toBeVisible();
 	});
 
 	test('should save new order', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const reorderBtn = page.locator('[data-testid="reorder-mode"]');
 		if (await reorderBtn.isVisible()) {
@@ -165,7 +165,7 @@ test.describe('5.5 Recall Published Article', () => {
 	});
 
 	test('should have recall button for published articles', async ({ page }) => {
-		await page.goto('/admin/content?status=published');
+		await page.goto('/admin/macro/articles?status=published');
 
 		const recallBtn = page.locator('[data-testid="recall-btn"]').first();
 		if (await recallBtn.isVisible()) {
@@ -174,7 +174,7 @@ test.describe('5.5 Recall Published Article', () => {
 	});
 
 	test('should recall article to draft', async ({ page }) => {
-		await page.goto('/admin/content?status=published');
+		await page.goto('/admin/macro/articles?status=published');
 
 		const recallBtn = page.locator('[data-testid="recall-btn"]').first();
 		if (await recallBtn.isVisible()) {
@@ -194,7 +194,7 @@ test.describe('5.6 Deactivate Article', () => {
 	});
 
 	test('should have deactivate option', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const deactivateBtn = page.locator('[data-testid="deactivate-btn"]').first();
 		if (await deactivateBtn.isVisible()) {
@@ -203,7 +203,7 @@ test.describe('5.6 Deactivate Article', () => {
 	});
 
 	test('should require confirmation for deactivate', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const deactivateBtn = page.locator('[data-testid="deactivate-btn"]').first();
 		if (await deactivateBtn.isVisible()) {
@@ -219,7 +219,7 @@ test.describe('5.7 Reactivate Article', () => {
 	});
 
 	test('should show reactivate for inactive articles', async ({ page }) => {
-		await page.goto('/admin/content?show_inactive=true');
+		await page.goto('/admin/macro/articles?show_inactive=true');
 
 		const reactivateBtn = page.locator('[data-testid="reactivate-btn"]').first();
 		if (await reactivateBtn.isVisible()) {
@@ -234,7 +234,7 @@ test.describe('5.8 Purge Article (Permanent Delete)', () => {
 	});
 
 	test('should have purge option', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const purgeBtn = page.locator('[data-testid="purge-btn"]').first();
 		if (await purgeBtn.isVisible()) {
@@ -243,7 +243,7 @@ test.describe('5.8 Purge Article (Permanent Delete)', () => {
 	});
 
 	test('should show strong warning for purge', async ({ page }) => {
-		await page.goto('/admin/content');
+		await page.goto('/admin/macro/articles');
 
 		const purgeBtn = page.locator('[data-testid="purge-btn"]').first();
 		if (await purgeBtn.isVisible()) {
@@ -262,13 +262,13 @@ test.describe('6.1 Access Global Admin Panel', () => {
 	});
 
 	test('should load global admin panel', async ({ page }) => {
-		await page.goto('/admin/global');
+		await page.goto('/root/users');
 
 		await expect(page.locator('[data-testid="global-admin-panel"]')).toBeVisible();
 	});
 
 	test('should show all topics', async ({ page }) => {
-		await page.goto('/admin/global');
+		await page.goto('/root/topics');
 
 		await expect(page.locator('[data-testid="topics-list"]')).toBeVisible();
 	});
@@ -280,13 +280,13 @@ test.describe('6.2 Manage Topics', () => {
 	});
 
 	test('should have create topic option', async ({ page }) => {
-		await page.goto('/admin/global?view=topics');
+		await page.goto('/root/topics');
 
 		await expect(page.locator('[data-testid="create-topic-btn"]')).toBeVisible();
 	});
 
 	test('should open topic creation form', async ({ page }) => {
-		await page.goto('/admin/global?view=topics');
+		await page.goto('/root/topics');
 
 		await page.click('[data-testid="create-topic-btn"]');
 
@@ -302,13 +302,13 @@ test.describe('6.3 Edit Global Prompts', () => {
 	});
 
 	test('should display prompt modules', async ({ page }) => {
-		await page.goto('/admin/global?view=prompts');
+		await page.goto('/root/prompts');
 
 		await expect(page.locator('[data-testid="prompt-modules"]')).toBeVisible();
 	});
 
 	test('should edit general prompt', async ({ page }) => {
-		await page.goto('/admin/global?view=prompts');
+		await page.goto('/root/prompts');
 
 		const generalPrompt = page.locator('[data-testid="prompt-general"]');
 		if (await generalPrompt.isVisible()) {
@@ -325,13 +325,13 @@ test.describe('6.4 Manage Tonality Options', () => {
 	});
 
 	test('should view tonality options', async ({ page }) => {
-		await page.goto('/admin/global?view=tonality');
+		await page.goto('/root/tonalities');
 
 		await expect(page.locator('[data-testid="tonality-list"]')).toBeVisible();
 	});
 
 	test('should create new tonality', async ({ page }) => {
-		await page.goto('/admin/global?view=tonality');
+		await page.goto('/root/tonalities');
 
 		await page.click('[data-testid="create-tonality-btn"]');
 
@@ -345,13 +345,13 @@ test.describe('6.5 System-Wide User Management', () => {
 	});
 
 	test('should view all users', async ({ page }) => {
-		await page.goto('/admin/global?view=users');
+		await page.goto('/root/users');
 
 		await expect(page.locator('[data-testid="user-list"]')).toBeVisible();
 	});
 
 	test('should search for user', async ({ page }) => {
-		await page.goto('/admin/global?view=users');
+		await page.goto('/root/users');
 
 		await page.fill('[data-testid="user-search"]', 'test@');
 
@@ -360,7 +360,7 @@ test.describe('6.5 System-Wide User Management', () => {
 	});
 
 	test('should assign user to group', async ({ page }) => {
-		await page.goto('/admin/global?view=users');
+		await page.goto('/root/users');
 
 		const userRow = page.locator('[data-testid="user-row"]').first();
 		if (await userRow.isVisible()) {
@@ -372,7 +372,7 @@ test.describe('6.5 System-Wide User Management', () => {
 	});
 
 	test('should ban/unban user', async ({ page }) => {
-		await page.goto('/admin/global?view=users');
+		await page.goto('/root/users');
 
 		const banBtn = page.locator('[data-testid="ban-user-btn"]').first();
 		if (await banBtn.isVisible()) {

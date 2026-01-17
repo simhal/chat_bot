@@ -32,26 +32,26 @@ test.describe('7.1 View Profile', () => {
 	});
 
 	test('should load profile page', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="profile-page"]')).toBeVisible();
 	});
 
 	test('should display personal info', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="user-name"]')).toBeVisible();
 		await expect(page.locator('[data-testid="user-email"]')).toBeVisible();
 	});
 
 	test('should show assigned groups', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="user-groups"]')).toBeVisible();
 	});
 
 	test('should display access statistics', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="access-stats"]')).toBeVisible();
 	});
@@ -63,19 +63,19 @@ test.describe('7.2 Update Chat Tonality', () => {
 	});
 
 	test('should display tonality settings', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="tonality-settings"]')).toBeVisible();
 	});
 
 	test('should have chat tonality selector', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="chat-tonality-select"]')).toBeVisible();
 	});
 
 	test('should save tonality preference', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		const select = page.locator('[data-testid="chat-tonality-select"]');
 		if (await select.isVisible()) {
@@ -93,13 +93,13 @@ test.describe('7.3 Update Content Tonality', () => {
 	});
 
 	test('should have content tonality selector', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		await expect(page.locator('[data-testid="content-tonality-select"]')).toBeVisible();
 	});
 
 	test('should save content tonality preference', async ({ page }) => {
-		await page.goto('/profile');
+		await page.goto('/user/profile');
 
 		const select = page.locator('[data-testid="content-tonality-select"]');
 		if (await select.isVisible()) {
@@ -157,7 +157,7 @@ test.describe('8.2 Chat with Article Context', () => {
 	});
 
 	test('should include article references in response', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 
 		await page.fill('[data-testid="chat-input"]', 'Tell me about recent macro articles');
 		await page.press('[data-testid="chat-input"]', 'Enter');

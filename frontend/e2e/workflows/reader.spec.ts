@@ -47,11 +47,11 @@ test.describe('2.1 Browse Published Articles', () => {
 		await page.click('[data-testid="topic-tab-macro"]');
 
 		// Verify URL updates
-		await expect(page).toHaveURL(/\?tab=macro/);
+		await expect(page).toHaveURL(/\/reader\/macro/);
 	});
 
 	test('should display articles for selected topic', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 
 		// Wait for articles to load
 		await page.waitForSelector('[data-testid="article-list"]');
@@ -68,7 +68,7 @@ test.describe('2.2 Read Article Details', () => {
 	});
 
 	test('should open article detail view', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 
 		// Click on first article
 		await page.click('[data-testid="article-item"]:first-child');
@@ -78,7 +78,7 @@ test.describe('2.2 Read Article Details', () => {
 	});
 
 	test('should display article metadata', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 		await page.click('[data-testid="article-item"]:first-child');
 
 		// Verify metadata is shown
@@ -130,13 +130,13 @@ test.describe('2.4 Search Articles - Advanced', () => {
 	});
 
 	test('should open advanced search panel', async ({ page }) => {
-		await page.goto('/?tab=search');
+		await page.goto('/reader/search');
 
 		await expect(page.locator('[data-testid="advanced-search-panel"]')).toBeVisible();
 	});
 
 	test('should filter by headline', async ({ page }) => {
-		await page.goto('/?tab=search');
+		await page.goto('/reader/search');
 
 		await page.fill('[data-testid="search-headline"]', 'GDP');
 		await page.click('[data-testid="search-submit"]');
@@ -146,7 +146,7 @@ test.describe('2.4 Search Articles - Advanced', () => {
 	});
 
 	test('should combine multiple filters', async ({ page }) => {
-		await page.goto('/?tab=search');
+		await page.goto('/reader/search');
 
 		// Fill multiple fields
 		await page.fill('[data-testid="search-keywords"]', 'economy');
@@ -163,14 +163,14 @@ test.describe('2.5 Rate Article', () => {
 	});
 
 	test('should display rating control', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 		await page.click('[data-testid="article-item"]:first-child');
 
 		await expect(page.locator('[data-testid="rating-control"]')).toBeVisible();
 	});
 
 	test('should submit rating', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 		await page.click('[data-testid="article-item"]:first-child');
 
 		// Click 4th star
@@ -187,14 +187,14 @@ test.describe('2.6 Download Article as PDF', () => {
 	});
 
 	test('should have download PDF button', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 		await page.click('[data-testid="article-item"]:first-child');
 
 		await expect(page.locator('[data-testid="download-pdf"]')).toBeVisible();
 	});
 
 	test('should trigger PDF download', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 		await page.click('[data-testid="article-item"]:first-child');
 
 		// Wait for download
@@ -213,7 +213,7 @@ test.describe('2.7 View Article Resources', () => {
 	});
 
 	test('should display resource links if article has resources', async ({ page }) => {
-		await page.goto('/?tab=macro');
+		await page.goto('/reader/macro');
 		await page.click('[data-testid="article-item"]:first-child');
 
 		// Resources section should be visible if article has resources
