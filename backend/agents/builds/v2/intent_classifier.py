@@ -1027,6 +1027,11 @@ def _build_classification_prompt(
     # Build few-shot examples section
     examples_text = _build_examples_section()
 
+    # Get dynamic topics list from database
+    from agents.shared.topic_manager import get_all_topics
+    all_topics = get_all_topics()
+    topics_info = ", ".join([f"{t.slug} ({t.name})" for t in all_topics]) if all_topics else "macro, equity, fixed_income, esg"
+
     prompt = f"""You are an intent classifier for a financial research platform. Classify the user's message into one of the intent types below.
 
 ## Intent Types
@@ -1165,7 +1170,7 @@ def _build_classification_prompt(
 - IMPORTANT: Do NOT set topic field for navigation to analyst/editor/admin/profile pages unless explicitly mentioned
 - IMPORTANT: If user says "go to" or "navigate" but the target is unclear, classify as general_chat to ask for clarification. Do NOT default to goto_home.
 - If the message is ambiguous, lean toward general_chat
-- Extract topic only if the user explicitly mentions a topic name (macro, equity, fixed_income, esg)
+- Extract topic only if the user explicitly mentions a topic name. Available topics: {topics_info}
 - Extract article_id if mentioned or from context
 {examples_text}
 ## Current Request
