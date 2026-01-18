@@ -3,28 +3,12 @@
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 from typing import List, Dict, Optional
-from pydantic_settings import BaseSettings
 import logging
 from openai import OpenAI
 
+from config import settings
+
 logger = logging.getLogger("uvicorn")
-
-
-class VectorDBSettings(BaseSettings):
-    """Settings for vector database configuration."""
-    chroma_host: str = "localhost"
-    chroma_port: int = 8001
-    chroma_collection_name: str = "research_articles"
-    openai_api_key: str = ""
-    openai_embedding_model: str = "text-embedding-3-small"
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        extra = "ignore"
-
-
-vector_settings = VectorDBSettings()
 
 # Lazy initialization
 _chroma_client = None
@@ -46,12 +30,12 @@ def _get_chroma_client():
 
     try:
         logger.info("Vector DB: Initializing ChromaDB connection")
-        logger.info(f"  Host: {vector_settings.chroma_host}")
-        logger.info(f"  Port: {vector_settings.chroma_port}")
+        logger.info(f"  Host: {settings.chroma_host}")
+        logger.info(f"  Port: {settings.chroma_port}")
 
         _chroma_client = chromadb.HttpClient(
-            host=vector_settings.chroma_host,
-            port=vector_settings.chroma_port,
+            host=settings.chroma_host,
+            port=settings.chroma_port,
             settings=ChromaSettings(
                 anonymized_telemetry=False
             )
@@ -62,7 +46,7 @@ def _get_chroma_client():
 
         # Get or create collection
         _collection = _chroma_client.get_or_create_collection(
-            name=vector_settings.chroma_collection_name,
+            name=settings.chroma_collection_name,
             metadata={
                 "description": "Research articles with semantic embeddings",
                 "hnsw:space": "cosine"  # Cosine similarity for embeddings
@@ -71,7 +55,7 @@ def _get_chroma_client():
 
         _vectordb_initialized = True
         logger.info(f"✓ Vector DB: ChromaDB connected successfully")
-        logger.info(f"  Collection: {vector_settings.chroma_collection_name}")
+        logger.info(f"  Collection: {settings.chroma_collection_name}")
         logger.info(f"  Documents: {_collection.count()}")
 
         return _chroma_client, _collection
@@ -91,13 +75,13 @@ def _get_openai_client():
     if _openai_client:
         return _openai_client
 
-    if not vector_settings.openai_api_key:
+    if not settings.openai_api_key:
         logger.warning("OpenAI API key not configured - embeddings unavailable")
         return None
 
     try:
-        _openai_client = OpenAI(api_key=vector_settings.openai_api_key)
-        logger.info(f"✓ OpenAI embeddings initialized: {vector_settings.openai_embedding_model}")
+        _openai_client = OpenAI(api_key=settings.openai_api_key)
+        logger.info(f"✓ OpenAI embeddings initialized: {settings.openai_embedding_model}")
         return _openai_client
     except Exception as e:
         logger.error(f"✗ OpenAI client initialization failed: {e}")
@@ -117,7 +101,7 @@ class VectorService:
         try:
             response = client.embeddings.create(
                 input=text,
-                model=vector_settings.openai_embedding_model
+                model=settings.openai_embedding_model
             )
             return response.data[0].embedding
         except Exception as e:
@@ -410,6 +394,56 @@ class VectorService:
             return None
 
     @staticmethod
+    def search_articles(
+        query: str,
+        topic: Optional[str] = None,
+        limit: int = 10
+    ) -> List[Dict]:
+        """
+        Search articles and return full article data.
+
+        Combines semantic search with article data retrieval to return
+        complete article information for each match.
+
+        Args:
+            query: Search query
+            topic: Optional topic filter
+            limit: Maximum results
+
+        Returns:
+            List of article dictionaries with full data and similarity scores
+        """
+        # First do semantic search to get matching article IDs
+        search_results = VectorService.semantic_search(query, topic, limit)
+
+        if not search_results:
+            return []
+
+        # Get full article data for each result
+        articles = []
+        for result in search_results:
+            article_id = result.get('article_id')
+            if article_id:
+                article_data = VectorService.get_article_data(article_id)
+                if article_data:
+                    # Flatten the data structure for easy access
+                    metadata = article_data.get('metadata', {})
+                    flattened = {
+                        'article_id': metadata.get('article_id', article_id),
+                        'headline': metadata.get('headline', ''),
+                        'topic': metadata.get('topic', ''),
+                        'author': metadata.get('author', ''),
+                        'editor': metadata.get('editor', ''),
+                        'keywords': metadata.get('keywords', ''),
+                        'content': article_data.get('content', ''),
+                        'similarity_score': result.get('similarity_score', 0)
+                    }
+                    articles.append(flattened)
+
+        logger.info(f"✓ Article search: {len(articles)} results for '{query[:50]}'")
+        return articles
+
+    @staticmethod
     def get_collection_stats() -> Dict:
         """Get statistics about the vector collection."""
         _, collection = _get_chroma_client()
@@ -420,8 +454,8 @@ class VectorService:
             return {
                 "available": True,
                 "count": collection.count(),
-                "name": vector_settings.chroma_collection_name,
-                "embedding_model": vector_settings.openai_embedding_model
+                "name": settings.chroma_collection_name,
+                "embedding_model": settings.openai_embedding_model
             }
         except Exception as e:
             return {"available": False, "error": str(e)}
