@@ -1,0 +1,301 @@
+{
+  "global_actions": [
+    {
+      "action": "goto",
+      "description": "Navigate to any section",
+      "params": {
+        "section": { "type": "string", "required": true },
+        "topic": { "type": "string", "required": false },
+        "article_id": { "type": "number", "required": false }
+      }
+    },
+    {
+      "action": "goto_back",
+      "description": "Navigate to previous page",
+      "params": {}
+    },
+    {
+      "action": "select_topic",
+      "description": "Change current topic context",
+      "params": {
+        "topic": { "type": "string", "required": true }
+      }
+    },
+    {
+      "action": "select_article",
+      "description": "Select/highlight an article",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    {
+      "action": "logout",
+      "description": "Log out user",
+      "params": {}
+    }
+  ],
+  "section_actions": {
+    "search_articles": {
+      "description": "Execute search with query",
+      "params": {
+        "query": { "type": "string", "required": false }
+      }
+    },
+    "clear_search": {
+      "description": "Clear search filters",
+      "params": {}
+    },
+    "open_article": {
+      "description": "Open article modal",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "close_modal": {
+      "description": "Close article modal",
+      "params": {}
+    },
+    "rate_article": {
+      "description": "Rate the article (1-5)",
+      "params": {
+        "rating": { "type": "number", "required": true, "min": 1, "max": 5 }
+      }
+    },
+    "download_pdf": {
+      "description": "Download article as PDF",
+      "params": {
+        "article_id": { "type": "number", "required": false }
+      }
+    },
+    "create_article": {
+      "description": "Create new article",
+      "params": {}
+    },
+    "edit_article": {
+      "description": "Open article in editor",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "delete_article": {
+      "description": "Delete draft article",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "submit_article": {
+      "description": "Submit article for review",
+      "params": {
+        "article_id": { "type": "number", "required": false }
+      }
+    },
+    "save_draft": {
+      "description": "Save current changes",
+      "params": {}
+    },
+    "submit_for_review": {
+      "description": "Submit to editor queue",
+      "params": {}
+    },
+    "switch_view_editor": {
+      "description": "Switch to markdown editor tab",
+      "params": {}
+    },
+    "switch_view_preview": {
+      "description": "Switch to preview tab",
+      "params": {}
+    },
+    "switch_view_resources": {
+      "description": "Switch to resources tab",
+      "params": {}
+    },
+    "link_resource": {
+      "description": "Link resource to article",
+      "params": {
+        "resource_id": { "type": "number", "required": true }
+      }
+    },
+    "unlink_resource": {
+      "description": "Unlink resource from article",
+      "params": {
+        "resource_id": { "type": "number", "required": true }
+      }
+    },
+    "browse_resources": {
+      "description": "Open resource browser",
+      "params": {}
+    },
+    "publish_article": {
+      "description": "Publish article",
+      "params": {
+        "article_id": { "type": "number", "required": false }
+      }
+    },
+    "reject_article": {
+      "description": "Reject and return to analyst",
+      "params": {
+        "article_id": { "type": "number", "required": false },
+        "feedback": { "type": "string", "required": false }
+      }
+    },
+    "deactivate_article": {
+      "description": "Soft delete article",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "reactivate_article": {
+      "description": "Restore deactivated article",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "recall_article": {
+      "description": "Return published article to draft",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "purge_article": {
+      "description": "Permanently delete article",
+      "params": {
+        "article_id": { "type": "number", "required": true }
+      }
+    },
+    "delete_resource": {
+      "description": "Delete resource",
+      "params": {
+        "resource_id": { "type": "number", "required": true }
+      }
+    },
+    "upload_resource": {
+      "description": "Upload new resource",
+      "params": {}
+    },
+    "edit_prompt": {
+      "description": "Edit prompt",
+      "params": {
+        "prompt_id": { "type": "number", "required": false }
+      }
+    },
+    "save_prompt": {
+      "description": "Save prompt changes",
+      "params": {}
+    },
+    "create_user": {
+      "description": "Create new user",
+      "params": {}
+    },
+    "ban_user": {
+      "description": "Ban user",
+      "params": {
+        "user_id": { "type": "number", "required": true }
+      }
+    },
+    "unban_user": {
+      "description": "Unban user",
+      "params": {
+        "user_id": { "type": "number", "required": true }
+      }
+    },
+    "delete_user": {
+      "description": "Delete user",
+      "params": {
+        "user_id": { "type": "number", "required": true }
+      }
+    },
+    "assign_group": {
+      "description": "Assign user to group",
+      "params": {
+        "user_id": { "type": "number", "required": true },
+        "group_id": { "type": "number", "required": true }
+      }
+    },
+    "remove_group": {
+      "description": "Remove user from group",
+      "params": {
+        "user_id": { "type": "number", "required": true },
+        "group_id": { "type": "number", "required": true }
+      }
+    },
+    "create_group": {
+      "description": "Create new group",
+      "params": {}
+    },
+    "delete_group": {
+      "description": "Delete group",
+      "params": {
+        "group_id": { "type": "number", "required": true }
+      }
+    },
+    "assign_user": {
+      "description": "Add user to group",
+      "params": {
+        "user_id": { "type": "number", "required": true },
+        "group_id": { "type": "number", "required": true }
+      }
+    },
+    "remove_user": {
+      "description": "Remove user from group",
+      "params": {
+        "user_id": { "type": "number", "required": true },
+        "group_id": { "type": "number", "required": true }
+      }
+    },
+    "create_topic": {
+      "description": "Create new topic",
+      "params": {}
+    },
+    "edit_topic": {
+      "description": "Edit topic settings",
+      "params": {
+        "topic_id": { "type": "number", "required": true }
+      }
+    },
+    "delete_topic": {
+      "description": "Delete topic",
+      "params": {
+        "topic_id": { "type": "number", "required": true }
+      }
+    },
+    "reorder_topics": {
+      "description": "Change topic order",
+      "params": {
+        "topic_ids": { "type": "array", "required": true }
+      }
+    },
+    "create_tonality": {
+      "description": "Create new tonality option",
+      "params": {}
+    },
+    "edit_tonality": {
+      "description": "Edit tonality",
+      "params": {
+        "tonality_id": { "type": "number", "required": true }
+      }
+    },
+    "delete_tonality": {
+      "description": "Delete tonality",
+      "params": {
+        "tonality_id": { "type": "number", "required": true }
+      }
+    },
+    "set_default": {
+      "description": "Set default tonality",
+      "params": {
+        "tonality_id": { "type": "number", "required": true }
+      }
+    },
+    "save_tonality": {
+      "description": "Save tonality preferences",
+      "params": {
+        "chat_tonality_id": { "type": "number", "required": false },
+        "content_tonality_id": { "type": "number", "required": false }
+      }
+    },
+    "delete_account": {
+      "description": "Delete user account",
+      "params": {}
+    }
+  }
+}

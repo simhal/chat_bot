@@ -1,0 +1,164 @@
+{
+  "sections": {
+    "home": {
+      "name": "Home",
+      "route": "/",
+      "required_role": "any",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": []
+    },
+    "reader_search": {
+      "name": "Search",
+      "route": "/reader/search",
+      "required_role": "any",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["search_articles", "clear_search", "open_article"]
+    },
+    "reader_topic": {
+      "name": "Topic Articles",
+      "route": "/reader/[topic]",
+      "required_role": "{topic}:reader",
+      "requires_topic": true,
+      "requires_article": false,
+      "ui_actions": ["open_article", "search_articles"]
+    },
+    "reader_article": {
+      "name": "Article View",
+      "route": "/reader/[topic]/article/[id]",
+      "required_role": "{topic}:reader",
+      "requires_topic": true,
+      "requires_article": true,
+      "ui_actions": ["close_modal", "rate_article", "download_pdf"]
+    },
+    "analyst_dashboard": {
+      "name": "Analyst Dashboard",
+      "route": "/analyst/[topic]",
+      "required_role": "{topic}:analyst",
+      "requires_topic": true,
+      "requires_article": false,
+      "ui_actions": ["create_article", "edit_article", "open_article", "delete_article", "submit_article"]
+    },
+    "analyst_editor": {
+      "name": "Article Editor",
+      "route": "/analyst/[topic]/edit/[id]",
+      "required_role": "{topic}:analyst",
+      "requires_topic": true,
+      "requires_article": true,
+      "ui_actions": ["save_draft", "submit_for_review", "switch_view_editor", "switch_view_preview", "switch_view_resources", "link_resource", "unlink_resource", "browse_resources"]
+    },
+    "analyst_article": {
+      "name": "Article Preview",
+      "route": "/analyst/[topic]/article/[id]",
+      "required_role": "{topic}:analyst",
+      "requires_topic": true,
+      "requires_article": true,
+      "ui_actions": ["close_modal", "edit_article"]
+    },
+    "editor_dashboard": {
+      "name": "Editor Dashboard",
+      "route": "/editor/[topic]",
+      "required_role": "{topic}:editor",
+      "requires_topic": true,
+      "requires_article": false,
+      "ui_actions": ["open_article", "publish_article", "reject_article"]
+    },
+    "editor_article": {
+      "name": "Article Review",
+      "route": "/editor/[topic]/article/[id]",
+      "required_role": "{topic}:editor",
+      "requires_topic": true,
+      "requires_article": true,
+      "ui_actions": ["close_modal", "publish_article", "reject_article", "download_pdf"]
+    },
+    "admin_articles": {
+      "name": "Article Management",
+      "route": "/admin/[topic]/articles",
+      "required_role": "{topic}:admin",
+      "requires_topic": true,
+      "requires_article": false,
+      "ui_actions": ["deactivate_article", "reactivate_article", "recall_article", "purge_article"]
+    },
+    "admin_resources": {
+      "name": "Resource Management",
+      "route": "/admin/[topic]/resources",
+      "required_role": "{topic}:admin",
+      "requires_topic": true,
+      "requires_article": false,
+      "ui_actions": ["delete_resource", "upload_resource"]
+    },
+    "admin_prompts": {
+      "name": "Topic Prompts",
+      "route": "/admin/[topic]/prompts",
+      "required_role": "{topic}:admin",
+      "requires_topic": true,
+      "requires_article": false,
+      "ui_actions": ["edit_prompt", "save_prompt"]
+    },
+    "root_users": {
+      "name": "User Management",
+      "route": "/root/users",
+      "required_role": "global:admin",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["create_user", "ban_user", "unban_user", "delete_user", "assign_group", "remove_group"]
+    },
+    "root_groups": {
+      "name": "Group Management",
+      "route": "/root/groups",
+      "required_role": "global:admin",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["create_group", "delete_group", "assign_user", "remove_user"]
+    },
+    "root_topics": {
+      "name": "Topic Management",
+      "route": "/root/topics",
+      "required_role": "global:admin",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["create_topic", "edit_topic", "delete_topic", "reorder_topics"]
+    },
+    "root_prompts": {
+      "name": "Global Prompts",
+      "route": "/root/prompts",
+      "required_role": "global:admin",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["edit_prompt", "save_prompt"]
+    },
+    "root_tonalities": {
+      "name": "Tonality Options",
+      "route": "/root/tonalities",
+      "required_role": "global:admin",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["create_tonality", "edit_tonality", "delete_tonality", "set_default"]
+    },
+    "root_resources": {
+      "name": "Global Resources",
+      "route": "/root/resources",
+      "required_role": "global:admin",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["delete_resource", "upload_resource"]
+    },
+    "user_profile": {
+      "name": "My Profile",
+      "route": "/user/profile",
+      "required_role": "any",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": []
+    },
+    "user_settings": {
+      "name": "Settings",
+      "route": "/user/settings",
+      "required_role": "any",
+      "requires_topic": false,
+      "requires_article": false,
+      "ui_actions": ["save_tonality", "delete_account"]
+    }
+  }
+}
