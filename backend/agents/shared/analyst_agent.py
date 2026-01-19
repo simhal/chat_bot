@@ -11,7 +11,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sqlalchemy.orm import Session
 
-from agents.builds.v1.state import (
+from agents import (
     AgentState,
     UserContext,
     WorkflowContext,

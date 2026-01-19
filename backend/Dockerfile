@@ -22,7 +22,7 @@ RUN uv sync --no-cache
 
 # Copy application code
 COPY main.py database.py models.py auth.py redis_client.py ./
-COPY conversation_memory.py seed_db.py dependencies.py observability.py ./
+COPY conversation_memory.py seed_db.py dependencies.py observability.py config.py ./
 COPY .env ./
 
 # Copy multi-agent system directories

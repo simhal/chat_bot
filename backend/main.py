@@ -17,7 +17,7 @@ from models import User, Group
 from auth import create_access_token, create_refresh_token, verify_access_token, verify_refresh_token, revoke_access_token, revoke_refresh_token
 
 # Import shared state models for API
-from agents.state import NavigationContextModel
+from agents import NavigationContextModel
 
 # Import API routers (will be included after app initialization)
 # from api.admin_prompts import router as admin_prompts_router

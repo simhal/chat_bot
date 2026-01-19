@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from agents.builds.v1.state import ChatResponse
+    from agents import ChatResponse
 
 
 class AgentBuildBase(ABC):

@@ -14,7 +14,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
 
-from agents.builds.v1.state import AgentState, UserContext, update_workflow_step
+from agents import AgentState, UserContext, update_workflow_step
 from services.permission_service import PermissionService
 
 

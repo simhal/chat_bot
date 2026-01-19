@@ -12,8 +12,7 @@ from dependencies import get_valid_topics
 import os
 import logging
 
-from agents.graph import invoke_chat
-from agents.state import UserContext, NavigationContext
+from agents import invoke_chat, UserContext, NavigationContext
 
 logger = logging.getLogger("uvicorn")
 

@@ -8,7 +8,7 @@ used by agents for permission checking and personalization.
 from typing import Dict, List, Optional, Any
 from sqlalchemy.orm import Session
 
-from agents.state import UserContext, create_user_context
+from agents import UserContext, create_user_context
 
 
 class UserContextService:

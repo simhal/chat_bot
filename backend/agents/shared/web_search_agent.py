@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional, List
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
-from agents.builds.v1.state import AgentState, UserContext
+from agents import AgentState, UserContext
 
 
 class WebSearchAgent:
