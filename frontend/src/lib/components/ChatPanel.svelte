@@ -322,20 +322,24 @@
 				console.log('🧭 Fallback navigation: goto_search ->', topic);
 				goto('/reader/search');
 				return true;
+			case 'goto_reader':
 			case 'goto_reader_topic':
-				console.log('🧭 Fallback navigation: goto_reader_topic ->', topic);
+				console.log('🧭 Fallback navigation: goto_reader ->', topic);
 				goto(topic ? `/reader/${topic}` : '/');
 				return true;
+			case 'goto_analyst':
 			case 'goto_analyst_topic':
-				console.log('🧭 Fallback navigation: goto_analyst_topic ->', topic);
+				console.log('🧭 Fallback navigation: goto_analyst ->', topic);
 				goto(topic ? `/analyst/${topic}` : '/analyst');
 				return true;
+			case 'goto_editor':
 			case 'goto_editor_topic':
-				console.log('🧭 Fallback navigation: goto_editor_topic ->', topic);
+				console.log('🧭 Fallback navigation: goto_editor ->', topic);
 				goto(topic ? `/editor/${topic}` : '/editor');
 				return true;
+			case 'goto_admin':
 			case 'goto_admin_topic':
-				console.log('🧭 Fallback navigation: goto_admin_topic ->', topic);
+				console.log('🧭 Fallback navigation: goto_admin ->', topic);
 				goto(topic ? `/admin/${topic}` : '/admin');
 				return true;
 			case 'goto_root':
