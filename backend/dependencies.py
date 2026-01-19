@@ -371,19 +371,23 @@ async def require_reader_for_topic(
     """
     Dependency for /api/reader/{topic}/ routes.
 
-    Requires: Any authenticated user. Topic must exist.
+    Requires: Any authenticated user. Topic must exist (or be "all" for cross-topic search).
 
     Args:
-        topic: Topic slug from URL path
+        topic: Topic slug from URL path (or "all" for all topics)
         user: Current authenticated user
         db: Database session
 
     Returns:
-        Tuple of (user dict, validated topic slug)
+        Tuple of (user dict, validated topic slug or "all")
 
     Raises:
         HTTPException 400: Invalid topic
     """
+    # Allow "all" as a special value for cross-topic search
+    if topic == "all":
+        return user, "all"
+
     # Validate topic exists
     valid_topics = get_valid_topics(db)
     if topic not in valid_topics:
