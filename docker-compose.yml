@@ -65,6 +65,7 @@ services:
     volumes:
       - uploads_data:/app/uploads
       - ./docs:/app/docs:ro  # Mount docs for frontend documentation (read-only)
+      - ./frontend/shared:/frontend/shared:ro  # Mount shared config for navigation/actions
     depends_on:
       postgres:
         condition: service_healthy
