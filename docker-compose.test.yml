@@ -88,6 +88,7 @@ services:
       - ./backend:/app
       - /app/.venv  # Anonymous volume to prevent host .venv from being mounted
       - test_uploads:/app/uploads
+      - ./frontend/shared:/frontend/shared:ro  # Shared JSON configs for agent builds
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -132,6 +133,7 @@ services:
       - ./backend:/app
       - /app/.venv  # Anonymous volume to prevent host .venv from being mounted
       - test_uploads:/app/uploads
+      - ./frontend/shared:/frontend/shared:ro  # Shared JSON configs for agent builds
     depends_on:
       postgres-test:
         condition: service_healthy

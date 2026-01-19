@@ -22,13 +22,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis cache with RedisJSON/RediSearch modules (required for LangGraph checkpointer)
+  # Redis cache for auth tokens and session data
   redis:
-    image: redis/redis-stack:latest
+    image: redis:7-alpine
     container_name: chatbot-redis
     ports:
       - "6379:6379"
-      - "8002:8001"  # RedisInsight web UI (8001 is used by ChromaDB)
     volumes:
       - redis_data:/data
     restart: unless-stopped

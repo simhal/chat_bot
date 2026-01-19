@@ -48,39 +48,18 @@ def _get_checkpointer():
     """
     Get singleton checkpointer instance.
 
-    Uses Redis in production (for HITL state persistence across restarts),
-    falls back to MemorySaver for development.
+    Uses MemorySaver for HITL state persistence. With sticky sessions enabled
+    on the load balancer, users will be routed to the same backend instance,
+    ensuring workflow continuity.
+
+    Note: If the backend restarts, in-flight HITL workflows will be lost.
+    This is acceptable for most use cases.
     """
     global _CHECKPOINTER
     if _CHECKPOINTER is not None:
         return _CHECKPOINTER
 
-    if settings.redis_url:
-        try:
-            from langgraph.checkpoint.redis import RedisSaver
-            # from_conn_string returns a context manager; enter it to get the saver instance
-            saver_context = RedisSaver.from_conn_string(settings.redis_url)
-            _CHECKPOINTER = saver_context.__enter__()
-            try:
-                _CHECKPOINTER.setup()  # Initialize Redis indices (requires RediSearch module)
-            except Exception as setup_err:
-                # RediSearch module may not be available (e.g., using redis:alpine instead of redis-stack)
-                # The checkpointer can still work for basic operations without search indices
-                if "unknown command" in str(setup_err).lower() or "FT." in str(setup_err):
-                    logger.warning(
-                        f"Redis setup() failed (RediSearch module not available): {setup_err}. "
-                        "Consider using redis/redis-stack image for full functionality."
-                    )
-                else:
-                    raise  # Re-raise if it's a different error
-            logger.info("Using Redis checkpointer for HITL state persistence")
-            return _CHECKPOINTER
-        except ImportError as e:
-            logger.warning(f"Redis checkpointer not available: {e}")
-        except Exception as e:
-            logger.warning(f"Failed to connect to Redis: {e}")
-
-    logger.info("Using in-memory checkpointer")
+    logger.info("Using in-memory checkpointer (sticky sessions required for HITL)")
     _CHECKPOINTER = MemorySaver()
     return _CHECKPOINTER
 
