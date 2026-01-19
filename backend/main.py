@@ -362,8 +362,8 @@ async def dev_login(request: DevLoginRequest, db: Session = Depends(get_db)):
             detail=f"Test user not found: {request.email}"
         )
 
-    # Get user's groups
-    groups = [ug.group.name for ug in user.user_groups if ug.group]
+    # Get user's groups (User.groups is the relationship)
+    groups = [g.name for g in user.groups]
 
     # Create tokens
     access_token, _ = create_access_token(user, groups)
