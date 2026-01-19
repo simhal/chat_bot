@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import uiActionsConfig from '../../../../shared/ui_actions.json';
+import uiActionsConfig from '../../../shared/ui_actions.json';
 import type { SectionName } from './navigation';
 
 // =============================================================================
