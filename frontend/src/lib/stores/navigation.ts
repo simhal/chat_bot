@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import sectionsConfig from '../../../../shared/sections.json';
+import sectionsConfig from '../../../shared/sections.json';
 
 // =============================================================================
 // Types from Shared Configuration
