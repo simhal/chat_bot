@@ -231,6 +231,7 @@ class TokenExchangeResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int = 86400  # 24 hours
+    user: Optional[dict] = None  # User info for client
 
 
 class RefreshTokenRequest(BaseModel):
