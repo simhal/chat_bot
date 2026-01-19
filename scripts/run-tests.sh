@@ -172,7 +172,7 @@ start_base_containers() {
 
 # Function to start E2E test stack
 start_e2e_stack() {
-    echo -e "${BLUE}Starting E2E test stack (backend + frontend + celery)...${NC}"
+    echo -e "${BLUE}Starting E2E test stack (backend + frontend)...${NC}"
 
     cd "$PROJECT_ROOT"
 
@@ -181,7 +181,7 @@ start_e2e_stack() {
         BUILD_ARG="--build"
     fi
 
-    docker-compose -p chatbot-test -f docker-compose.test.yml --profile e2e up -d $BUILD_ARG backend-e2e celery-worker-test frontend-test
+    docker-compose -p chatbot-test -f docker-compose.test.yml --profile e2e up -d $BUILD_ARG backend-e2e frontend-test
 
     # Wait for backend to be healthy (test backend on port 8004)
     echo "Waiting for backend API to be ready..."
