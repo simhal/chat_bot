@@ -535,7 +535,7 @@ def _build_classification_prompt(
    - goto_home: "go to home", "show me articles", "take me to home page"
    - goto_analyst: "go to analyst hub", "analyst dashboard", "open analyst section"
    - goto_editor: "go to editor hub", "editor dashboard", "open editor section", "go to editor"
-   - goto_topic_admin: "go to admin", "take me to {topic} admin", "admin panel", "admin dashboard"
+   - goto_topic_admin: "go to admin", "take me to {{topic}} admin", "admin panel", "admin dashboard"
    - goto_admin_global: "global admin", "manage topics", "manage users", "system settings"
    - goto_profile: "go to profile", "my profile", "account settings"
    - goto_search: "open search", "search for articles"
