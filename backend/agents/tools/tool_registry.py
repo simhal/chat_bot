@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Callable, Any, TYPE_CHECKING
 from langchain_core.tools import BaseTool
 
 if TYPE_CHECKING:
-    from agents.state import UserContext
+    from agents import UserContext
 
 
 @dataclass

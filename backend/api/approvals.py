@@ -450,8 +450,7 @@ async def resume_workflow(
         The result of the resumed workflow
     """
     try:
-        from agents.graph import resume_chat
-        from agents.state import create_user_context
+        from agents import resume_chat, create_user_context
 
         user_id = user.get("sub")
         user_scopes = user.get("scopes", [])
