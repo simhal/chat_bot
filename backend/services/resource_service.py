@@ -14,7 +14,7 @@ from models import (
     TimeseriesMetadata, TimeseriesData, TimeseriesFrequency, TimeseriesDataType,
     ContentArticle, Group, article_resources
 )
-from services.vector_service import VectorService, _get_chroma_client, vector_settings
+from services.vector_service import VectorService, _get_chroma_client
 
 logger = logging.getLogger("uvicorn")
 
