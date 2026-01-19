@@ -362,8 +362,9 @@ run_e2e_tests() {
     npx playwright install chromium
 
     # Run E2E tests (using test ports: frontend=3001, backend=8004)
+    # CI=true disables Playwright's webServer since Docker is already running the servers
     echo "Running Playwright E2E tests..."
-    BASE_URL="http://localhost:3001" API_URL="http://localhost:8004" npx playwright test --reporter=html || E2E_RESULT=$?
+    CI=true BASE_URL="http://localhost:3001" API_URL="http://localhost:8004" npx playwright test --reporter=html || E2E_RESULT=$?
 
     cd "$PROJECT_ROOT"
 
