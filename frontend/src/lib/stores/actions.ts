@@ -1,97 +1,60 @@
 import { writable, get } from 'svelte/store';
+import uiActionsConfig from '../../../../shared/ui_actions.json';
+import type { SectionName } from './navigation';
 
-/**
- * UI Action types that can be triggered by the chatbot.
- * These correspond to button clicks, tab selections, and other UI interactions.
- */
-export type UIActionType =
-	// Analyst Edit Page Actions
-	| 'save_draft'
-	| 'submit_for_review'
-	| 'switch_view_editor'
-	| 'switch_view_preview'
-	| 'switch_view_resources'
-	// Resource Actions (for article editor)
-	| 'add_resource'
-	| 'remove_resource'
-	| 'link_resource'
-	| 'unlink_resource'
-	| 'browse_resources'
-	| 'open_resource_modal'
-	// Analyst Hub Page Actions
-	| 'create_new_article'
-	| 'view_article'
-	| 'edit_article'
-	| 'submit_article'
-	// Notification Actions (sent after backend operations complete)
-	| 'article_submitted'
-	| 'article_published'
-	| 'article_rejected'
-	// Editor Hub Page Actions
-	| 'reject_article'
-	| 'publish_article'
-	| 'download_pdf'
-	// Admin Article Actions (require confirmation)
-	| 'deactivate_article'
-	| 'reactivate_article'
-	| 'recall_article'
-	| 'purge_article'
-	| 'delete_article'
-	| 'delete_resource'
-	// Admin View Switching
-	| 'switch_admin_view'
-	| 'switch_admin_topic'
-	| 'switch_admin_subview'
-	// Profile Page Actions
-	| 'switch_profile_tab'
-	| 'save_tonality'
-	| 'delete_account'
-	// Home Page Actions
-	| 'select_topic_tab'
-	| 'rate_article'
-	| 'open_article'
-	| 'search_articles'
-	| 'clear_search'
-	// Common Actions
-	| 'select_topic'
-	| 'close_modal'
-	| 'confirm_action'
-	| 'cancel_action'
-	// Context Update Actions (triggered by chat to request article/resource info)
-	| 'select_article'
-	| 'select_resource'
-	// Navigation Actions (emulate button clicks for better UX)
-	| 'goto_home'
-	| 'goto_analyst'
-	| 'goto_editor'
-	| 'goto_topic_admin'
-	| 'goto_admin_global'
-	| 'goto_profile'
-	| 'goto_search';
+// =============================================================================
+// Types from Shared Configuration
+// =============================================================================
+
+// Global action names from config
+type GlobalActionName = typeof uiActionsConfig.global_actions[number]['action'];
+
+// Section action names from config
+type SectionActionName = keyof typeof uiActionsConfig.section_actions;
+
+// Combined UI action type - includes global actions and section-specific actions
+// Note: Explicitly include 'goto_back' to ensure type inference works correctly
+export type UIActionType = GlobalActionName | SectionActionName | 'goto_back';
+
+// Action parameter types
+export interface ActionParams {
+	// Navigation (for 'goto' action)
+	section?: SectionName;
+	topic?: string;
+	article_id?: number;
+	// Article operations
+	rating?: number;
+	search_query?: string;
+	feedback?: string;
+	// Resource operations
+	resource_id?: number;
+	scope?: 'global' | 'topic' | 'article' | 'all';
+	// User/group operations
+	user_id?: number;
+	group_id?: number;
+	// Topic operations
+	topic_id?: number;
+	topic_ids?: number[];
+	// Tonality operations
+	tonality_id?: number;
+	chat_tonality_id?: number;
+	content_tonality_id?: number;
+	// Prompt operations
+	prompt_id?: number;
+	// Confirmation
+	requires_confirmation?: boolean;
+	confirmation_message?: string;
+	confirmed?: boolean;
+	// Generic
+	[key: string]: any;
+}
 
 /**
  * UI Action payload sent from the chatbot.
  */
 export interface UIAction {
 	type: UIActionType;
-	params?: {
-		article_id?: number;
-		topic?: string;
-		rating?: number;
-		search_query?: string;
-		resource_id?: number;
-		scope?: 'global' | 'topic' | 'article' | 'all';
-		action?: 'add' | 'remove' | 'view';
-		// Tab/view switching
-		tab?: string;  // Tab name (e.g., 'info', 'settings' for profile)
-		view?: string;  // View name (e.g., 'users', 'groups', 'prompts' for admin)
-		subview?: string;  // Subview name (e.g., 'articles', 'resources' for topic view)
-		// Confirmation
-		requires_confirmation?: boolean;
-		confirmation_message?: string;
-		confirmed?: boolean;
-		[key: string]: any;
-	};
+	params?: ActionParams;
 	timestamp: number;
 }
 
@@ -106,10 +69,42 @@ export interface ActionResult {
 	data?: any;
 }
 
+// =============================================================================
+// Action Configuration Helpers
+// =============================================================================
+
 /**
- * Store for UI actions triggered by the chatbot.
- * Page components subscribe to this store and execute the corresponding actions.
+ * Get configuration for a global action
  */
+export function getGlobalActionConfig(actionName: string) {
+	return uiActionsConfig.global_actions.find(a => a.action === actionName);
+}
+
+/**
+ * Get configuration for a section action
+ */
+export function getSectionActionConfig(actionName: string) {
+	return (uiActionsConfig.section_actions as Record<string, any>)[actionName];
+}
+
+/**
+ * Check if an action is a global action
+ */
+export function isGlobalAction(actionName: string): boolean {
+	return uiActionsConfig.global_actions.some(a => a.action === actionName);
+}
+
+/**
+ * Get all global action names
+ */
+export function getGlobalActionNames(): string[] {
+	return uiActionsConfig.global_actions.map(a => a.action);
+}
+
+// =============================================================================
+// Action Store
+// =============================================================================
+
 function createActionStore() {
 	const { subscribe, set, update } = writable<UIAction | null>(null);
 

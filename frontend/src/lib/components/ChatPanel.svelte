@@ -274,35 +274,81 @@
 				// Navigate back to analyst hub to see the rejected article
 				goto(topic ? `/analyst/${topic}` : '/analyst');
 				return true;
+			// Unified goto action - parse params.section
+			case 'goto':
+				const section = uiAction.params?.section;
+				console.log('🧭 Fallback navigation: goto ->', section, topic);
+				if (section) {
+					// Map section names to routes
+					const sectionRoutes: Record<string, string> = {
+						'home': '/',
+						'reader_search': '/reader/search',
+						'reader_topic': topic ? `/reader/${topic}` : '/',
+						'user_profile': '/user/profile',
+						'user_settings': '/user/settings',
+						'analyst_dashboard': topic ? `/analyst/${topic}` : '/analyst',
+						'analyst_editor': articleId ? `/analyst/edit/${articleId}` : '/analyst',
+						'editor_dashboard': topic ? `/editor/${topic}` : '/editor',
+						'admin_articles': topic ? `/admin/${topic}/articles` : '/admin',
+						'admin_resources': topic ? `/admin/${topic}/resources` : '/admin',
+						'admin_prompts': topic ? `/admin/${topic}/prompts` : '/admin',
+						'root_users': '/root/users',
+						'root_groups': '/root/groups',
+						'root_topics': '/root/topics',
+						'root_prompts': '/root/prompts',
+						'root_tonalities': '/root/tonalities',
+						'root_resources': '/root/resources',
+					};
+					const route = sectionRoutes[section] || '/';
+					goto(route);
+					return true;
+				}
+				return false;
+			// Go back action
+			case 'goto_back':
+				console.log('🧭 Fallback navigation: goto_back');
+				if (typeof window !== 'undefined' && window.history.length > 1) {
+					window.history.back();
+				} else {
+					goto('/');
+				}
+				return true;
 			// Navigation actions (goto_*)
 			case 'goto_home':
 				console.log('🧭 Fallback navigation: goto_home ->', topic);
-				goto(topic ? `/?tab=${topic}` : '/');
-				return true;
-			case 'goto_analyst':
-				console.log('🧭 Fallback navigation: goto_analyst ->', topic);
-				goto(topic ? `/analyst/${topic}` : '/analyst');
-				return true;
-			case 'goto_editor':
-				console.log('🧭 Fallback navigation: goto_editor ->', topic);
-				goto(topic ? `/editor/${topic}` : '/editor');
-				return true;
-			case 'goto_topic_admin':
-				console.log('🧭 Fallback navigation: goto_topic_admin');
-				goto('/admin');
-				return true;
-			case 'goto_admin_global':
-				console.log('🧭 Fallback navigation: goto_admin_global');
-				goto('/admin/global');
-				return true;
-			case 'goto_profile':
-				console.log('🧭 Fallback navigation: goto_profile');
-				goto('/profile');
+				goto('/');
 				return true;
 			case 'goto_search':
 				console.log('🧭 Fallback navigation: goto_search ->', topic);
-				// Navigate to home with search tab or trigger search modal
-				goto(topic ? `/?tab=${topic}&search=true` : '/?search=true');
+				goto('/reader/search');
+				return true;
+			case 'goto_reader_topic':
+				console.log('🧭 Fallback navigation: goto_reader_topic ->', topic);
+				goto(topic ? `/reader/${topic}` : '/');
+				return true;
+			case 'goto_analyst_topic':
+				console.log('🧭 Fallback navigation: goto_analyst_topic ->', topic);
+				goto(topic ? `/analyst/${topic}` : '/analyst');
+				return true;
+			case 'goto_editor_topic':
+				console.log('🧭 Fallback navigation: goto_editor_topic ->', topic);
+				goto(topic ? `/editor/${topic}` : '/editor');
+				return true;
+			case 'goto_admin_topic':
+				console.log('🧭 Fallback navigation: goto_admin_topic ->', topic);
+				goto(topic ? `/admin/${topic}` : '/admin');
+				return true;
+			case 'goto_root':
+				console.log('🧭 Fallback navigation: goto_root');
+				goto('/root/users');
+				return true;
+			case 'goto_user_profile':
+				console.log('🧭 Fallback navigation: goto_user_profile');
+				goto('/user/profile');
+				return true;
+			case 'goto_user_settings':
+				console.log('🧭 Fallback navigation: goto_user_settings');
+				goto('/user/settings');
 				return true;
 		}
 		return false;
@@ -403,7 +449,7 @@
 	}
 </script>
 
-<div class="chat-panel">
+<div class="chat-panel" data-testid="chat-panel">
 	<!-- Context Bar -->
 	<div class="context-bar">
 		<div class="context-info">
@@ -465,7 +511,7 @@
 			</div>
 		{:else}
 			{#each messages as message}
-				<div class="message {message.role}">
+				<div class="message {message.role}" data-testid="chat-message-{message.role}">
 					<div class="message-content">
 						{#if message.role === 'assistant'}
 							<Markdown content={message.content} />
@@ -527,6 +573,7 @@
 				placeholder="Type your message..."
 				rows="1"
 				disabled={loading || !$auth.isAuthenticated}
+				data-testid="chat-input"
 			></textarea>
 			<button
 				class="send-btn"

@@ -66,7 +66,7 @@
     let allGlobalResources: Resource[] = [];  // All global resources (for categorization)
     let resourcesLoading = false;
 
-    $: articleId = parseInt($page.params.id);
+    $: articleId = parseInt($page.params.id || '0');
 
     // Check if user can edit this topic
     function canEditTopic(topic: string): boolean {
@@ -92,6 +92,11 @@
             }
 
             article = await getAnalystArticle(storedTopic, articleId);
+
+            if (!article) {
+                error = 'Article not found';
+                return;
+            }
 
             if (!canEditTopic(article.topic)) {
                 error = 'You do not have permission to edit this article';
@@ -409,14 +414,33 @@
             if (payload.keywords) editKeywords = payload.keywords;
         } else if (payload.action === 'append') {
             if (payload.content) editContent += '\n\n' + payload.content;
+        } else if (payload.action === 'update_headline') {
+            if (payload.headline) editHeadline = payload.headline;
+        } else if (payload.action === 'update_keywords') {
+            if (payload.keywords) editKeywords = payload.keywords;
+        } else if (payload.action === 'update_content') {
+            if (payload.content) editContent = payload.content;
         }
 
         // Check if new resources were linked
         const linkedResources = payload.linked_resources || [];
         const newlyLinked = linkedResources.filter(r => !r.already_linked);
 
-        // Build message with resource info
-        let message = 'Content has been generated and filled into the editor fields.';
+        // Build message based on what was updated
+        let message = '';
+        if (payload.action === 'fill' || payload.action === 'replace') {
+            message = 'Content has been generated and filled into the editor fields.';
+        } else if (payload.action === 'update_headline') {
+            message = 'Headline has been updated.';
+        } else if (payload.action === 'update_keywords') {
+            message = 'Keywords have been updated.';
+        } else if (payload.action === 'update_content') {
+            message = 'Content has been updated.';
+        } else if (payload.action === 'append') {
+            message = 'Content has been appended.';
+        } else {
+            message = 'Content has been updated.';
+        }
         if (newlyLinked.length > 0) {
             message += `\n\n${newlyLinked.length} resource(s) have been linked to this article:`;
             for (const r of newlyLinked) {
@@ -556,12 +580,12 @@
         <div class="error-screen">
             <h2>Error</h2>
             <p>{error}</p>
-            <button on:click={() => goto('/admin/content')}>Back to Content Management</button>
+            <button on:click={() => goto('/')}>Back to Home</button>
         </div>
     {:else if article}
         <header class="editor-header">
             <div class="header-left">
-                <button class="back-btn" on:click={() => goto(`/analyst/${article.topic}`)}>
+                <button class="back-btn" on:click={() => article && goto(`/analyst/${article.topic}`)}>
                     ← Back to {article.topic.replace('_', ' ').toUpperCase()}
                 </button>
                 <div class="article-info">
@@ -624,6 +648,7 @@
                             bind:value={editHeadline}
                             placeholder="Article headline"
                             maxlength="500"
+                            data-testid="editor-headline"
                         />
                     </div>
 
@@ -635,6 +660,7 @@
                             bind:value={editKeywords}
                             placeholder="keyword1, keyword2, keyword3"
                             maxlength="500"
+                            data-testid="editor-keywords"
                         />
                     </div>
 
@@ -649,6 +675,7 @@
                             placeholder="Article content in Markdown format..."
                             on:drop={handleContentDrop}
                             on:dragover={handleContentDragOver}
+                            data-testid="editor-content"
                         ></textarea>
                     </div>
                 </div>
@@ -697,13 +724,13 @@
         </div>
 
         <!-- Fixed Chat Panel -->
-        <div class="chat-panel">
+        <div class="chat-panel" data-testid="editor-chat-panel">
             <div class="chat-header">
                 <h4>Content Agent Assistant</h4>
                 <span class="chat-hint">Ask the agent to modify the article</span>
             </div>
 
-            <div class="chat-messages">
+            <div class="chat-messages" data-testid="editor-chat-messages">
                 {#if chatMessages.length === 0}
                     <div class="chat-empty">
                         <p class="chat-welcome">Content Agent Assistant</p>
@@ -718,7 +745,7 @@
                     </div>
                 {:else}
                     {#each chatMessages as msg}
-                        <div class="chat-message" class:user={msg.role === 'user'} class:agent={msg.role === 'agent'}>
+                        <div class="chat-message" class:user={msg.role === 'user'} class:agent={msg.role === 'agent'} data-testid="editor-chat-message-{msg.role}">
                             <div class="message-header">
                                 <span class="message-role">{msg.role === 'user' ? 'You' : 'Agent'}</span>
                                 <span class="message-time">{formatTime(msg.timestamp)}</span>
@@ -728,7 +755,7 @@
                     {/each}
                 {/if}
                 {#if chatLoading}
-                    <div class="chat-message agent loading">
+                    <div class="chat-message agent loading" data-testid="editor-chat-loading">
                         <div class="message-content">
                             <div class="typing-indicator">
                                 <span></span>
@@ -746,8 +773,9 @@
                     bind:value={chatInput}
                     placeholder="e.g., 'Make the introduction more engaging' or 'Add statistics about this topic'"
                     disabled={chatLoading}
+                    data-testid="editor-chat-input"
                 />
-                <button type="submit" disabled={!chatInput.trim() || chatLoading}>
+                <button type="submit" disabled={!chatInput.trim() || chatLoading} data-testid="editor-chat-send">
                     Send
                 </button>
             </form>

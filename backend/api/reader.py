@@ -264,10 +264,13 @@ async def search_articles(
     user, validated_topic = user_topic
     limit = min(limit, 50)
 
+    # Convert "all" to None for cross-topic search
+    search_topic = None if validated_topic == "all" else validated_topic
+
     # Readers can only search published articles
     articles = ContentService.search_articles(
         db=db,
-        topic=validated_topic,
+        topic=search_topic,
         query=q,
         headline=headline,
         keywords=keywords,

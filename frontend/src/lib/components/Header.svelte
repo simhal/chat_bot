@@ -84,8 +84,8 @@
     $: accessibleTopics = topics;
 
     // Check if user has any analyst/editor access
-    $: hasAnyAnalystAccess = (userScopes, topics.some(t => hasAnalystAccess(t.id)));
-    $: hasAnyEditorAccess = (userScopes, topics.some(t => hasEditorAccess(t.id)));
+    $: hasAnyAnalystAccess = userScopes.length >= 0 && topics.some(t => hasAnalystAccess(t.id));
+    $: hasAnyEditorAccess = userScopes.length >= 0 && topics.some(t => hasEditorAccess(t.id));
 
     // Check if user has topic admin access (for any topic)
     function hasTopicAdminAccess(topic: string): boolean {
@@ -93,7 +93,7 @@
         if ($auth.user.scopes.includes('global:admin')) return true;
         return $auth.user.scopes.includes(`${topic}:admin`);
     }
-    $: hasAnyTopicAdminAccess = (userScopes, topics.some(t => hasTopicAdminAccess(t.id)));
+    $: hasAnyTopicAdminAccess = userScopes.length >= 0 && topics.some(t => hasTopicAdminAccess(t.id));
 
     // Check if user has global admin access
     $: isGlobalAdmin = userScopes.includes('global:admin');
@@ -101,13 +101,16 @@
     // Determine active route
     $: currentPath = $page.url.pathname;
     $: isHome = currentPath === '/';
+    $: isReaderSearch = currentPath === '/reader/search';
+    $: isReaderTopic = currentPath.startsWith('/reader/') && !isReaderSearch;
     $: isAnalyst = currentPath.startsWith('/analyst');
     $: isEditor = currentPath.startsWith('/editor');
-    $: isTopicAdmin = currentPath === '/admin' || (currentPath.startsWith('/admin') && !currentPath.startsWith('/admin/global'));
-    $: isGlobalAdminPage = currentPath.startsWith('/admin/global');
+    $: isTopicAdmin = currentPath === '/admin' || (currentPath.startsWith('/admin') && !currentPath.startsWith('/root'));
+    $: isGlobalAdminPage = currentPath.startsWith('/root');
     $: isProfile = currentPath.startsWith('/profile');
-    // Get active topic from query param on home page
-    $: activeTopic = isHome ? $page.url.searchParams.get('tab') : null;
+    // Get active topic from URL path for reader pages, or from query param on home page
+    $: activeReaderTopic = isReaderTopic ? currentPath.split('/reader/')[1]?.split('/')[0] : null;
+    $: activeTopic = isHome ? $page.url.searchParams.get('tab') : activeReaderTopic;
 
     // Get user display name
     $: userFullName = $auth.user?.name && $auth.user?.surname
@@ -129,10 +132,10 @@
      * Clicking an already-active topic deselects it (navigates to search).
      */
     function handleTopicClick(event: MouseEvent, topicId: string) {
-        if (activeTopic === topicId) {
+        if (activeTopic === topicId && (isReaderTopic || isHome)) {
             // Already active - toggle off (go to search view)
             event.preventDefault();
-            goto('/?tab=search');
+            goto('/reader/search');
         }
         // Otherwise, let the normal <a> navigation happen
     }
@@ -151,12 +154,12 @@
         <nav class="header-nav">
             <!-- Topic tabs on the left (Chat removed - now always visible in split pane) -->
             <div class="topic-nav">
-                <a href="/?tab=search" class="nav-link topic-link" class:active={isHome && activeTopic === 'search'}>Search</a>
+                <a href="/reader/search" class="nav-link topic-link" class:active={isReaderSearch}>Search</a>
                 {#each accessibleTopics as topic}
                     <a
-                        href="/?tab={topic.id}"
+                        href="/reader/{topic.id}"
                         class="nav-link topic-link"
-                        class:active={isHome && activeTopic === topic.id}
+                        class:active={activeTopic === topic.id}
                         on:click={(e) => handleTopicClick(e, topic.id)}
                     >{topic.label}</a>
                 {/each}
@@ -174,7 +177,7 @@
                     <a href="/admin" class="nav-link function-link" class:active={isTopicAdmin}>Topic Admin</a>
                 {/if}
                 {#if isGlobalAdmin}
-                    <a href="/admin/global" class="nav-link function-link" class:active={isGlobalAdminPage}>Global Admin</a>
+                    <a href="/root" class="nav-link function-link" class:active={isGlobalAdminPage}>Global Admin</a>
                 {/if}
                 <a href="/profile" class="nav-link function-link" class:active={isProfile}>Profile</a>
             </div>
