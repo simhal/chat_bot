@@ -329,6 +329,61 @@ async def debug_settings():
     }
 
 
+# =============================================================================
+# Dev/Test Login Endpoint (only available when TESTING=true)
+# =============================================================================
+
+class DevLoginRequest(BaseModel):
+    """Request body for dev login."""
+    email: str
+
+
+@app.post("/api/auth/dev-login", response_model=TokenExchangeResponse)
+async def dev_login(request: DevLoginRequest, db: Session = Depends(get_db)):
+    """
+    Development/test login endpoint - bypasses LinkedIn OAuth.
+    ONLY available when TESTING environment variable is set to 'true'.
+
+    This endpoint allows E2E tests to authenticate as test users without
+    going through the full OAuth flow.
+    """
+    # Security: Only allow in test environment
+    if os.environ.get("TESTING", "").lower() != "true":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found"
+        )
+
+    # Find user by email
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Test user not found: {request.email}"
+        )
+
+    # Get user's groups
+    groups = [ug.group.name for ug in user.user_groups if ug.group]
+
+    # Create tokens
+    access_token, _ = create_access_token(user, groups)
+    refresh_token = create_refresh_token(user.id)
+
+    return TokenExchangeResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="Bearer",
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "surname": user.surname,
+            "picture": user.picture,
+            "scopes": groups
+        }
+    )
+
+
 @app.post("/api/auth/token", response_model=TokenExchangeResponse)
 async def exchange_token(request: TokenExchangeRequest, db: Session = Depends(get_db)):
     """
